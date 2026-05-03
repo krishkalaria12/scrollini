@@ -17,18 +17,30 @@ struct ScrolliniConfig: Codable {
     var workspaceAutoBackAndForth: Bool?
     var centerFocusedColumn: Bool?
     var excludedKeybindings: [String]?
+    var trackpadNavigation: Bool?
+    var trackpadNavigationFingers: Int?
+    var trackpadNavigationSensitivity: CGFloat?
+    var trackpadNavigationDeceleration: CGFloat?
+    var trackpadNavigationInvertX: Bool?
+    var trackpadNavigationInvertY: Bool?
     var rules: [WindowRule]
 
     static let fallback = ScrolliniConfig(
         defaultWidthRatio: 0.8,
         presetWidthRatios: [0.5, 0.67, 0.8, 1.0],
-        animationDurationMS: 180,
+        animationDurationMS: 240,
         hoverToFocus: true,
         hoverFocusDelayMS: 120,
         hoverFocusMaxScrollRatio: 0.15,
         workspaceAutoBackAndForth: true,
         centerFocusedColumn: true,
         excludedKeybindings: ["cmd+shift+5"],
+        trackpadNavigation: true,
+        trackpadNavigationFingers: 3,
+        trackpadNavigationSensitivity: 1.6,
+        trackpadNavigationDeceleration: 5.5,
+        trackpadNavigationInvertX: false,
+        trackpadNavigationInvertY: false,
         rules: [
             WindowRule(bundleID: "com.apple.finder", behavior: .ignore),
         ]
@@ -50,6 +62,9 @@ struct ScrolliniConfig: Codable {
                 config.animationDurationMS = config.animationDurationMS.map { min(max($0, 0), 500) }
                 config.hoverFocusDelayMS = config.hoverFocusDelayMS.map { min(max($0, 0), 1000) }
                 config.hoverFocusMaxScrollRatio = config.hoverFocusMaxScrollRatio.map { min(max($0, 0), 2) }
+                config.trackpadNavigationFingers = config.trackpadNavigationFingers.map { min(max($0, 2), 5) }
+                config.trackpadNavigationSensitivity = config.trackpadNavigationSensitivity.map { min(max($0, 0.1), 20) }
+                config.trackpadNavigationDeceleration = config.trackpadNavigationDeceleration.map { min(max($0, 1), 30) }
                 config.rules = config.rules.map { rule in
                     var rule = rule
                     rule.widthRatio = rule.widthRatio.map(\.clampedWidthRatio)
@@ -108,6 +123,12 @@ struct ScrolliniConfig: Codable {
         case workspaceAutoBackAndForth = "workspace_auto_back_and_forth"
         case centerFocusedColumn = "center_focused_column"
         case excludedKeybindings = "excluded_keybindings"
+        case trackpadNavigation = "trackpad_navigation"
+        case trackpadNavigationFingers = "trackpad_navigation_fingers"
+        case trackpadNavigationSensitivity = "trackpad_navigation_sensitivity"
+        case trackpadNavigationDeceleration = "trackpad_navigation_deceleration"
+        case trackpadNavigationInvertX = "trackpad_navigation_invert_x"
+        case trackpadNavigationInvertY = "trackpad_navigation_invert_y"
         case rules
     }
 }

@@ -19,6 +19,15 @@ final class Scrollini: NSObject, @unchecked Sendable {
     private var hoverFocusTimer: DispatchSourceTimer?
     private var hoverFocusTarget: ObjectIdentifier?
     private var hoverFocusRequiresRearm = false
+    private var hoverFocusSuppressedUntil: CFAbsoluteTime = 0
+    private var trackpadNavigation: ThreeFingerTrackpadNavigation?
+    private var trackpadCameraY: CGFloat?
+    private var trackpadCameraVelocity = CGPoint.zero
+    private var trackpadPendingCameraDelta = CGSize.zero
+    private var trackpadLatestCameraVelocity = CGPoint.zero
+    private var trackpadRenderTimer: DispatchSourceTimer?
+    private var trackpadMomentumTimer: DispatchSourceTimer?
+    private var trackpadMomentumLastFrameAt: CFAbsoluteTime = 0
     private var manualResizeEndTimer: DispatchSourceTimer?
     private var manualResizeElement: AXUIElement?
     private var presentationFrames: [ObjectIdentifier: CGRect] = [:]
@@ -39,6 +48,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
         installTerminationHandlers()
         startCleanupWatcher()
         installEventTap()
+        installTrackpadNavigation()
         rescanWindows(adoptFocused: true)
         rescanTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.rescanWindows(adoptFocused: false)
@@ -51,6 +61,13 @@ final class Scrollini: NSObject, @unchecked Sendable {
         print("scrollini: Cmd+Shift+[/] or Cmd+Shift+Home/End move column to first/last")
         print("scrollini: Cmd+Ctrl+H/L cycle width presets, Cmd+Ctrl+-/= nudge width by 0.1")
         print("scrollini: Cmd+Ctrl+Shift+H/L cycle width presets for all windows, Cmd+Ctrl+Shift+-/= nudge all widths")
+        if trackpadNavigationEnabled {
+            if trackpadNavigation != nil {
+                print("scrollini: three-finger trackpad swipe navigates columns/workspaces")
+            } else {
+                print("scrollini: three-finger trackpad navigation unavailable; private MultitouchSupport backend did not start")
+            }
+        }
         print("scrollini: Cmd-Tab is passed through and adopted after macOS focuses a window")
         if !SkyLight.shared.canSetAlpha {
             print("scrollini: SkyLight alpha support unavailable; parked windows will remain as edge slivers")
@@ -150,6 +167,26 @@ final class Scrollini: NSObject, @unchecked Sendable {
         eventTapSource = source
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    private func installTrackpadNavigation() {
+        guard trackpadNavigationEnabled else {
+            return
+        }
+
+        let navigation = ThreeFingerTrackpadNavigation(
+            fingers: trackpadNavigationFingers,
+            invertX: trackpadNavigationInvertX,
+            invertY: trackpadNavigationInvertY
+        ) { [weak self] event in
+            DispatchQueue.main.async { [weak self] in
+                self?.handleTrackpadNavigationEvent(event)
+            }
+        }
+
+        guard navigation.start() else { return }
+
+        trackpadNavigation = navigation
     }
 
     fileprivate func handleKeyEvent(_ event: CGEvent) -> Bool {
@@ -400,6 +437,11 @@ final class Scrollini: NSObject, @unchecked Sendable {
             return
         }
 
+        guard CFAbsoluteTimeGetCurrent() >= hoverFocusSuppressedUntil else {
+            cancelHoverFocus()
+            return
+        }
+
         let point = event.location
         if shouldSuppressHoverFocusUntilRearmed(at: point) {
             cancelHoverFocus()
@@ -418,7 +460,285 @@ final class Scrollini: NSObject, @unchecked Sendable {
         }
     }
 
-    private func perform(_ command: Command) {
+    private func handleTrackpadNavigationEvent(_ event: TrackpadNavigationEvent) {
+        guard trackpadNavigationEnabled else {
+            return
+        }
+
+        switch event {
+        case .began:
+            beginTrackpadCamera()
+        case .changed(let delta, let velocity):
+            moveTrackpadCamera(delta: delta, velocity: velocity)
+        case .ended(let velocity):
+            endTrackpadCamera(velocity: velocity)
+        }
+    }
+
+    private func beginTrackpadCamera() {
+        guard manualResizeElement == nil else {
+            return
+        }
+
+        suppressHoverFocusAfterTrackpadMovement()
+        cancelHoverFocus()
+        hoverFocusRequiresRearm = false
+        stopTrackpadMomentum()
+        stopAnimation(clearPresentation: false)
+        rescanWindows(adoptFocused: false)
+        trackpadPendingCameraDelta = .zero
+        trackpadLatestCameraVelocity = .zero
+        seedTrackpadCamera(viewport: currentViewport())
+        startTrackpadRenderLoop()
+    }
+
+    private func moveTrackpadCamera(delta: CGPoint, velocity: CGPoint) {
+        guard manualResizeElement == nil else {
+            return
+        }
+
+        suppressHoverFocusAfterTrackpadMovement()
+        let viewport = currentViewport()
+        seedTrackpadCamera(viewport: viewport)
+        let cameraDelta = trackpadCameraDelta(from: delta, velocity: velocity, viewport: viewport)
+        trackpadPendingCameraDelta.width += cameraDelta.width
+        trackpadPendingCameraDelta.height += cameraDelta.height
+        trackpadLatestCameraVelocity = trackpadCameraVelocity(from: velocity, viewport: viewport)
+        trackpadCameraVelocity = trackpadLatestCameraVelocity
+        startTrackpadRenderLoop()
+    }
+
+    private func endTrackpadCamera(velocity: CGPoint) {
+        suppressHoverFocusAfterTrackpadMovement()
+        flushTrackpadCameraFrame()
+        stopTrackpadRenderLoop()
+        let viewport = currentViewport()
+        trackpadCameraVelocity = trackpadCameraVelocity(from: velocity, viewport: viewport)
+        if abs(trackpadCameraVelocity.x) < abs(trackpadLatestCameraVelocity.x) {
+            trackpadCameraVelocity.x = trackpadLatestCameraVelocity.x
+        }
+        if abs(trackpadCameraVelocity.y) < abs(trackpadLatestCameraVelocity.y) {
+            trackpadCameraVelocity.y = trackpadLatestCameraVelocity.y
+        }
+        guard abs(trackpadCameraVelocity.x) >= 80 || abs(trackpadCameraVelocity.y) >= 80 else {
+            settleTrackpadCamera(focusActiveWindow: true)
+            return
+        }
+
+        startTrackpadMomentum()
+    }
+
+    private func trackpadCameraDelta(from delta: CGPoint, velocity: CGPoint, viewport: CGRect) -> CGSize {
+        let multiplier = trackpadCameraVelocityGain(for: velocity)
+        return CGSize(
+            width: -delta.x * viewport.width * trackpadNavigationSensitivity * multiplier,
+            height: delta.y * viewport.height * trackpadNavigationSensitivity * multiplier
+        )
+    }
+
+    private func trackpadCameraVelocity(from velocity: CGPoint, viewport: CGRect) -> CGPoint {
+        let multiplier = trackpadCameraVelocityGain(for: velocity)
+        return CGPoint(
+            x: -velocity.x * viewport.width * trackpadNavigationSensitivity * multiplier,
+            y: velocity.y * viewport.height * trackpadNavigationSensitivity * multiplier
+        )
+    }
+
+    private func trackpadCameraVelocityGain(for velocity: CGPoint) -> CGFloat {
+        let speed = hypot(velocity.x, velocity.y)
+        let extra = min(max((speed - 0.35) / 1.4, 0), 1.35)
+        return 1 + extra
+    }
+
+    private func suppressHoverFocusAfterTrackpadMovement() {
+        hoverFocusSuppressedUntil = CFAbsoluteTimeGetCurrent() + 0.28
+        cancelHoverFocus()
+    }
+
+    private func seedTrackpadCamera(viewport: CGRect) {
+        if trackpadCameraY == nil {
+            trackpadCameraY = CGFloat(activeWorkspace) * viewport.height
+        }
+
+        if let workspace = activeWorkspaceObject(), workspace.scrollOffset == nil {
+            workspace.scrollOffset = horizontalCameraOffset(for: workspace, viewport: viewport)
+        }
+    }
+
+    private func startTrackpadMomentum() {
+        stopTrackpadMomentum()
+        trackpadMomentumLastFrameAt = CFAbsoluteTimeGetCurrent()
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            self?.stepTrackpadMomentum()
+        }
+        trackpadMomentumTimer = timer
+        timer.resume()
+    }
+
+    private func startTrackpadRenderLoop() {
+        guard trackpadRenderTimer == nil else {
+            return
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            self?.flushTrackpadCameraFrame()
+        }
+        trackpadRenderTimer = timer
+        timer.resume()
+    }
+
+    private func stopTrackpadRenderLoop() {
+        trackpadRenderTimer?.cancel()
+        trackpadRenderTimer = nil
+    }
+
+    private func flushTrackpadCameraFrame() {
+        guard abs(trackpadPendingCameraDelta.width) >= 0.5 || abs(trackpadPendingCameraDelta.height) >= 0.5 else {
+            return
+        }
+
+        guard manualResizeElement == nil else {
+            trackpadPendingCameraDelta = .zero
+            stopTrackpadRenderLoop()
+            return
+        }
+
+        let viewport = currentViewport()
+        seedTrackpadCamera(viewport: viewport)
+        let delta = trackpadPendingCameraDelta
+        trackpadPendingCameraDelta = .zero
+        _ = applyTrackpadCameraDelta(delta, viewport: viewport)
+        projectLayout(focusActiveWindow: false, layoutLockDelay: 0)
+    }
+
+    private func stepTrackpadMomentum() {
+        suppressHoverFocusAfterTrackpadMovement()
+        let now = CFAbsoluteTimeGetCurrent()
+        let elapsed = min(max(now - trackpadMomentumLastFrameAt, 1.0 / 120.0), 1.0 / 20.0)
+        trackpadMomentumLastFrameAt = now
+
+        let viewport = currentViewport()
+        let decay = exp(-trackpadNavigationDeceleration * elapsed)
+        trackpadCameraVelocity.x *= decay
+        trackpadCameraVelocity.y *= decay
+
+        let cameraDelta = CGSize(
+            width: trackpadCameraVelocity.x * elapsed,
+            height: trackpadCameraVelocity.y * elapsed
+        )
+        let clamped = applyTrackpadCameraDelta(cameraDelta, viewport: viewport)
+        if clamped.x {
+            trackpadCameraVelocity.x = 0
+        }
+        if clamped.y {
+            trackpadCameraVelocity.y = 0
+        }
+
+        projectLayout(focusActiveWindow: false, layoutLockDelay: 0)
+
+        if abs(trackpadCameraVelocity.x) < 80, abs(trackpadCameraVelocity.y) < 80 {
+            stopTrackpadMomentum()
+            settleTrackpadCamera(focusActiveWindow: true)
+        }
+    }
+
+    private func stopTrackpadMomentum() {
+        trackpadMomentumTimer?.cancel()
+        trackpadMomentumTimer = nil
+    }
+
+    @discardableResult
+    private func applyTrackpadCameraDelta(_ delta: CGSize, viewport: CGRect) -> (x: Bool, y: Bool) {
+        let currentY = trackpadCameraY ?? CGFloat(activeWorkspace) * viewport.height
+        let maxY = max(0, CGFloat(max(workspaces.count - 1, 0)) * viewport.height)
+        let nextY = min(max(currentY + delta.height, 0), maxY)
+        trackpadCameraY = nextY
+
+        let workspaceIndex = trackpadCameraWorkspaceIndex(cameraY: nextY, viewport: viewport)
+        var clampedX = false
+        if workspaces.indices.contains(workspaceIndex) {
+            let workspace = workspaces[workspaceIndex]
+            if !workspace.columns.isEmpty {
+                let currentX = horizontalCameraOffset(for: workspace, viewport: viewport)
+                let maxX = maxHorizontalCameraOffset(for: workspace, viewport: viewport)
+                let nextX = min(max(currentX + delta.width, 0), maxX)
+                workspace.scrollOffset = nextX
+                clampedX = abs(nextX - (currentX + delta.width)) > 0.5
+            }
+        }
+
+        let clampedY = abs(nextY - (currentY + delta.height)) > 0.5
+        return (clampedX, clampedY)
+    }
+
+    private func settleTrackpadCamera(focusActiveWindow: Bool) {
+        guard !workspaces.isEmpty else {
+            trackpadCameraY = nil
+            return
+        }
+
+        let viewport = currentViewport()
+        seedTrackpadCamera(viewport: viewport)
+        let previousState = captureLayoutState()
+        let targetWorkspace = trackpadCameraWorkspaceIndex(
+            cameraY: trackpadCameraY ?? CGFloat(activeWorkspace) * viewport.height,
+            viewport: viewport
+        )
+        setActiveWorkspace(targetWorkspace)
+
+        if let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty {
+            let offset = horizontalCameraOffset(for: workspace, viewport: viewport)
+            workspace.activeColumn = closestColumn(to: offset, in: workspace, viewport: viewport)
+            workspace.scrollOffset = nil
+        }
+
+        trackpadCameraY = nil
+        trackpadCameraVelocity = .zero
+        trackpadLatestCameraVelocity = .zero
+        trackpadPendingCameraDelta = .zero
+        hoverFocusRequiresRearm = true
+        suppressHoverFocusAfterTrackpadMovement()
+
+        let targetState = captureLayoutState()
+        projectLayout(
+            focusActiveWindow: focusActiveWindow,
+            animated: previousState != targetState,
+            from: previousState,
+            layoutLockDelay: 0.04
+        )
+    }
+
+    private func clearTrackpadCamera() {
+        stopTrackpadRenderLoop()
+        stopTrackpadMomentum()
+        trackpadPendingCameraDelta = .zero
+        trackpadLatestCameraVelocity = .zero
+        trackpadCameraY = nil
+        trackpadCameraVelocity = .zero
+    }
+
+    private func freezeTrackpadCameraForTransition() {
+        stopTrackpadRenderLoop()
+        stopTrackpadMomentum()
+
+        if abs(trackpadPendingCameraDelta.width) >= 0.5 || abs(trackpadPendingCameraDelta.height) >= 0.5 {
+            let viewport = currentViewport()
+            seedTrackpadCamera(viewport: viewport)
+            _ = applyTrackpadCameraDelta(trackpadPendingCameraDelta, viewport: viewport)
+            trackpadPendingCameraDelta = .zero
+        }
+
+        trackpadLatestCameraVelocity = .zero
+        trackpadCameraVelocity = .zero
+    }
+
+    private func perform(_ command: Command, animateWorkspace: Bool = false) {
+        clearTrackpadCamera()
         cancelHoverFocus()
         hoverFocusRequiresRearm = false
         rescanWindows(adoptFocused: false)
@@ -437,11 +757,13 @@ final class Scrollini: NSObject, @unchecked Sendable {
                 return
             }
             activeWorkspaceObject()?.clampFocus()
+            animated = animateWorkspace
         case .workspaceUp:
             guard setActiveWorkspace(activeWorkspace - 1) else {
                 return
             }
             activeWorkspaceObject()?.clampFocus()
+            animated = animateWorkspace
         case .columnLeft:
             guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
                 return
@@ -787,7 +1109,8 @@ final class Scrollini: NSObject, @unchecked Sendable {
         LayoutState(
             activeWorkspace: min(max(activeWorkspace, 0), max(workspaces.count - 1, 0)),
             activeColumns: workspaces.map(\.activeColumn),
-            scrollOffsets: workspaces.map(\.scrollOffset)
+            scrollOffsets: workspaces.map(\.scrollOffset),
+            cameraY: trackpadCameraY
         )
     }
 
@@ -1032,7 +1355,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private var animationDuration: TimeInterval {
-        TimeInterval(config.animationDurationMS ?? ScrolliniConfig.fallback.animationDurationMS ?? 180) / 1000
+        TimeInterval(config.animationDurationMS ?? ScrolliniConfig.fallback.animationDurationMS ?? 240) / 1000
     }
 
     private var hoverFocusEnabled: Bool {
@@ -1053,6 +1376,30 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
     private var centerFocusedColumn: Bool {
         config.centerFocusedColumn ?? ScrolliniConfig.fallback.centerFocusedColumn ?? true
+    }
+
+    private var trackpadNavigationEnabled: Bool {
+        config.trackpadNavigation ?? ScrolliniConfig.fallback.trackpadNavigation ?? true
+    }
+
+    private var trackpadNavigationFingers: Int {
+        config.trackpadNavigationFingers ?? ScrolliniConfig.fallback.trackpadNavigationFingers ?? 3
+    }
+
+    private var trackpadNavigationSensitivity: CGFloat {
+        config.trackpadNavigationSensitivity ?? ScrolliniConfig.fallback.trackpadNavigationSensitivity ?? 1.6
+    }
+
+    private var trackpadNavigationDeceleration: CGFloat {
+        config.trackpadNavigationDeceleration ?? ScrolliniConfig.fallback.trackpadNavigationDeceleration ?? 5.5
+    }
+
+    private var trackpadNavigationInvertX: Bool {
+        config.trackpadNavigationInvertX ?? ScrolliniConfig.fallback.trackpadNavigationInvertX ?? false
+    }
+
+    private var trackpadNavigationInvertY: Bool {
+        config.trackpadNavigationInvertY ?? ScrolliniConfig.fallback.trackpadNavigationInvertY ?? false
     }
 
     private var widthPresetRatios: [CGFloat] {
@@ -1084,6 +1431,8 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
     private func layoutItems(viewport: CGRect, state: LayoutState, parkHidden: Bool) -> [LayoutItem] {
         let stateActiveWorkspace = min(max(state.activeWorkspace, 0), max(workspaces.count - 1, 0))
+        let cameraY = state.cameraY ?? CGFloat(stateActiveWorkspace) * viewport.height
+        let cameraWorkspace = trackpadCameraWorkspaceIndex(cameraY: cameraY, viewport: viewport)
         var layout: [LayoutItem] = []
 
         for (workspaceIndex, workspace) in workspaces.enumerated() {
@@ -1095,7 +1444,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
                 activeColumn: activeColumn,
                 scrollOffset: scrollOffset
             )
-            let rowOffset = CGFloat(workspaceIndex - stateActiveWorkspace) * viewport.height
+            let rowOffset = CGFloat(workspaceIndex) * viewport.height - cameraY
 
             for (columnIndex, window) in workspace.columns.enumerated() {
                 let frame: CGRect
@@ -1105,10 +1454,14 @@ final class Scrollini: NSObject, @unchecked Sendable {
                 let visible = projected.intersects(viewport)
                 if visible || !parkHidden {
                     frame = projected
-                } else if workspaceIndex == stateActiveWorkspace {
+                } else if workspaceIndex == cameraWorkspace {
                     frame = parkedFrame(for: window, viewport: viewport, beforeActive: columnIndex < activeColumn)
                 } else {
-                    frame = parkedFrame(for: window, viewport: viewport, beforeActive: workspaceIndex < stateActiveWorkspace)
+                    frame = parkedFrame(
+                        for: window,
+                        viewport: viewport,
+                        beforeActive: CGFloat(workspaceIndex) * viewport.height < cameraY
+                    )
                 }
 
                 layout.append(LayoutItem(window: window, frame: frame, visible: visible))
@@ -1135,6 +1488,14 @@ final class Scrollini: NSObject, @unchecked Sendable {
             return state.scrollOffsets[workspaceIndex]
         }
         return workspace.scrollOffset
+    }
+
+    private func trackpadCameraWorkspaceIndex(cameraY: CGFloat, viewport: CGRect) -> Int {
+        guard viewport.height > 0, !workspaces.isEmpty else {
+            return 0
+        }
+
+        return min(max(Int(round(cameraY / viewport.height)), 0), workspaces.count - 1)
     }
 
     private func applyLayout(_ layout: [LayoutItem], focusActiveWindow: Bool) {
@@ -1322,7 +1683,9 @@ final class Scrollini: NSObject, @unchecked Sendable {
             return
         }
 
+        freezeTrackpadCameraForTransition()
         let previousState = captureLayoutState()
+        trackpadCameraY = nil
         setActiveWorkspace(workspaceIndex)
         workspace.activeColumn = columnIndex
         workspace.scrollOffset = nil
@@ -1476,7 +1839,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func softSettleCurve(_ progress: CGFloat) -> CGFloat {
-        cubicBezier(progress, x1: 0.2, y1: 0.0, x2: 0.0, y2: 1.0)
+        cubicBezier(progress, x1: 0.16, y1: 0.0, x2: 0.18, y2: 1.0)
     }
 
     private func cubicBezier(_ progress: CGFloat, x1: CGFloat, y1: CGFloat, x2: CGFloat, y2: CGFloat) -> CGFloat {
@@ -1562,6 +1925,58 @@ final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         return (origins, widths)
+    }
+
+    private func horizontalCameraOffset(for workspace: Workspace, viewport: CGRect) -> CGFloat {
+        if let scrollOffset = workspace.scrollOffset {
+            return min(max(scrollOffset, 0), maxHorizontalCameraOffset(for: workspace, viewport: viewport))
+        }
+
+        let metrics = stripMetrics(for: workspace, viewport: viewport)
+        let activeColumn = min(max(workspace.activeColumn, 0), max(workspace.columns.count - 1, 0))
+        return defaultScrollOffset(metrics: metrics, activeColumn: activeColumn, viewport: viewport)
+    }
+
+    private func maxHorizontalCameraOffset(for workspace: Workspace, viewport: CGRect) -> CGFloat {
+        guard !workspace.columns.isEmpty else {
+            return 0
+        }
+
+        let metrics = stripMetrics(for: workspace, viewport: viewport)
+        let contentWidth = zip(metrics.origins, metrics.widths)
+            .map { $0.0 + $0.1 }
+            .max() ?? viewport.width
+        let lastColumnOffset = defaultScrollOffset(
+            metrics: metrics,
+            activeColumn: workspace.columns.count - 1,
+            viewport: viewport
+        )
+        return max(0, contentWidth - viewport.width, lastColumnOffset)
+    }
+
+    private func closestColumn(to scrollOffset: CGFloat, in workspace: Workspace, viewport: CGRect) -> Int {
+        guard !workspace.columns.isEmpty else {
+            return 0
+        }
+
+        let metrics = stripMetrics(for: workspace, viewport: viewport)
+        let cameraCenter = scrollOffset + viewport.width / 2
+        var closestIndex = 0
+        var closestDistance = CGFloat.greatestFiniteMagnitude
+        for index in workspace.columns.indices {
+            guard metrics.origins.indices.contains(index), metrics.widths.indices.contains(index) else {
+                continue
+            }
+
+            let columnCenter = metrics.origins[index] + metrics.widths[index] / 2
+            let distance = abs(columnCenter - cameraCenter)
+            if distance < closestDistance {
+                closestDistance = distance
+                closestIndex = index
+            }
+        }
+
+        return closestIndex
     }
 
     private func defaultScrollOffset(
@@ -1817,6 +2232,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         if let loc = location(of: focusedElement) {
+            clearTrackpadCamera()
             setActiveWorkspace(loc.workspace)
             let workspace = workspaces[loc.workspace]
             workspace.activeColumn = loc.column

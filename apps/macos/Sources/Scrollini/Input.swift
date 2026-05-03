@@ -1,3 +1,5 @@
+import CoreGraphics
+
 enum KeyCode {
     static let one: Int64 = 18
     static let two: Int64 = 19
@@ -45,4 +47,10 @@ enum Command {
     case cycleAllWidthPresetsForward
     case nudgeAllWidthsNarrower
     case nudgeAllWidthsWider
+}
+
+enum TrackpadNavigationEvent {
+    case began
+    case changed(delta: CGPoint, velocity: CGPoint)
+    case ended(velocity: CGPoint)
 }

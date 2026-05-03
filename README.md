@@ -68,9 +68,15 @@ terminal app itself to get those permissions.
 | `Cmd+Ctrl+-` / `Cmd+Ctrl+=` | Nudge active column width |
 | `Cmd+Ctrl+Shift+H` / `Cmd+Ctrl+Shift+L` | Cycle every tiled window width preset |
 | `Cmd+Ctrl+Shift+-` / `Cmd+Ctrl+Shift+=` | Nudge every tiled window width |
+| three-finger trackpad swipe | Navigate columns / workspaces |
 
 Everything else passes through. The default config excludes `Cmd+Shift+5`, so
 macOS screen recording keeps working.
+
+Trackpad navigation uses Apple's private MultitouchSupport framework so Scrollini can
+see raw three-finger movement without stealing normal two-finger scrolling. It
+moves a continuous camera with momentum, then focuses the workspace and column
+nearest the camera when the motion settles.
 
 ## Config
 
@@ -87,13 +93,19 @@ The repo includes this default:
 {
   "default_width_ratio": 0.8,
   "preset_width_ratios": [0.5, 0.67, 0.8, 1.0],
-  "animation_duration_ms": 180,
+  "animation_duration_ms": 240,
   "hover_to_focus": true,
   "hover_focus_delay_ms": 120,
   "hover_focus_max_scroll_ratio": 0.15,
   "workspace_auto_back_and_forth": true,
   "center_focused_column": true,
   "excluded_keybindings": ["cmd+shift+5"],
+  "trackpad_navigation": true,
+  "trackpad_navigation_fingers": 3,
+  "trackpad_navigation_sensitivity": 1.6,
+  "trackpad_navigation_deceleration": 5.5,
+  "trackpad_navigation_invert_x": false,
+  "trackpad_navigation_invert_y": false,
   "rules": [
     {
       "bundle_id": "com.apple.finder",
