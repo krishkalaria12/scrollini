@@ -1,96 +1,85 @@
+<div align="center">
+
 # scrollini
 
-A small macOS MVP for a Niri-like, keyboard-first window layout.
+[![License](https://img.shields.io/badge/license-MIT-111111?style=flat-square)](./LICENSE)
+[![GitHub](https://img.shields.io/badge/github-krishkalaria12%2Fscrollini-111111?style=flat-square&logo=github)](https://github.com/krishkalaria12/scrollini)
+[![Ko-fi](https://img.shields.io/badge/ko--fi-krishkalaria12-111111?style=flat-square&logo=kofi)](https://ko-fi.com/krishkalaria12)
 
-This is not a compositor. It uses macOS Accessibility APIs to resize and move
-normal app windows into a virtual grid:
+<img src="./assets/repo/scrollini-demo.gif" alt="scrollini macOS window layout preview" width="1000" />
 
-- Workspaces are rows.
-- Windows are columns inside a workspace. By default each column is `0.8` of
-  the screen width, so the next column can peek in while you scroll sideways.
-- `center_focused_column` keeps the focused column centered when possible.
-  The first column remains pinned to the left edge.
-- Scrollini remembers the previous workspace. `workspace_auto_back_and_forth` makes
-  pressing the current workspace number jump back to it.
-- App rules can override column width ratios. A `1.0` ratio occupies the whole
-  screen width; larger ratios are allowed and grow beyond the screen.
-- `preset_width_ratios` can define quick active-column width presets. Preset
-  and nudge actions write the active window's session-only manual width ratio.
-- App rules can also mark windows as `ignore` or `float`. Ignored windows are
-  left alone. Floating windows are kept visible but are not tiled, resized,
-  centered, parked, hidden, or moved between workspaces.
-- Column navigation is animated by projecting the old and new virtual plane
-  views and interpolating the managed window frames. Workspace up/down jumps
-  immediately without vertical animation.
-- Manually resizing a tiled window updates that window's live width ratio for
-  the current session, then immediately reflows the rest of the row so columns
-  remain adjacent. Resizing from the left preserves the dragged left edge on
-  screen, so windows on the left can become visible too. Resize events are
-  tracked as a short live session so fast drags do not lose the final width.
-- `hover_to_focus` can focus a visible neighboring tiled column after the
-  pointer rests on it, using the same animated projection as keyboard focus.
-  `hover_focus_max_scroll_ratio` sets how far into a visible neighboring sliver
-  the pointer must move, as a fraction of the screen width, before delayed hover
-  focus scrolls there. Touching the far left or right edge on a visible
-  neighboring sliver focuses it immediately. After hover focus moves to a
-  window, the pointer must leave the next hover target before another hover
-  focus can fire, preventing chained jumps.
-- Neighboring/off-workspace windows are parked just past the side edge so macOS
-  does not forcibly relocate them, then hidden with SkyLight window alpha when
-  available.
+_Niri-ish, keyboard-first window manager for macOS._
+
+</div>
+
+## Install
+
+Build and run from source:
+
+```bash
+git clone https://github.com/krishkalaria12/scrollini.git
+cd scrollini/apps/macos
+swift run Scrollini
+```
+
+For a release build:
+
+```bash
+swift build -c release
+.build/release/Scrollini
+```
+
+scrollini needs Accessibility permission, and the event tap may also need Input
+Monitoring permission. If you run it from a terminal, macOS may ask for the
+terminal app itself to get those permissions.
+
+## What it does
+
+- Keeps a Niri-like virtual layout of workspaces and columns on macOS.
+- Tiles normal app windows with Accessibility APIs instead of acting as a
+  compositor.
+- Makes each column `0.8` screen widths by default, so the next column can peek
+  in while you move sideways.
+- Centers the focused column when possible, while keeping the first column
+  pinned to the left edge.
+- Tracks `Cmd+Tab`, app launches, app exits, manual window resizes, and focused
+  windows so the model follows macOS instead of fighting it.
+- Supports app rules for tiled, floating, and ignored windows.
+- Parks off-workspace windows near the side edge, with optional SkyLight alpha
+  hiding when those private symbols are available.
+- Restores tiled windows on normal exit and starts a small cleanup watcher for
+  crash or kill recovery.
 
 ## Shortcuts
 
-- `Cmd+1` ... `Cmd+9`: focus workspace by dynamic index. Indexes past the
-  current count clamp to the bottom empty workspace, matching Niri's behavior.
-- `Cmd+0`: focus the previous workspace.
-- `Cmd+J`: workspace down.
-- `Cmd+K`: workspace up.
-- `Cmd+H`: column left.
-- `Cmd+L`: column right.
-- `Cmd+[` / `Cmd+{` or `Cmd+Home`: first column.
-- `Cmd+]` / `Cmd+}` or `Cmd+End`: last column.
-- `Cmd+Shift+1` ... `Cmd+Shift+9`: move active column to workspace by
-  dynamic index. Indexes past the current count clamp to the bottom empty
-  workspace.
-- `Cmd+Shift+J`: move active column to workspace down.
-- `Cmd+Shift+K`: move active column to workspace up.
-- `Cmd+Shift+H`: move active column left.
-- `Cmd+Shift+L`: move active column right.
-- `Cmd+Shift+[` / `Cmd+Shift+{` or `Cmd+Shift+Home`: move active column to first.
-- `Cmd+Shift+]` / `Cmd+Shift+}` or `Cmd+Shift+End`: move active column to last.
-- `Cmd+Ctrl+H`: cycle active column to previous width preset.
-- `Cmd+Ctrl+L`: cycle active column to next width preset.
-- `Cmd+Ctrl+-`: nudge active column width down by `0.1`.
-- `Cmd+Ctrl+=`: nudge active column width up by `0.1`.
-- `Cmd+Ctrl+Shift+H`: cycle every tiled window to the previous width preset.
-- `Cmd+Ctrl+Shift+L`: cycle every tiled window to the next width preset.
-- `Cmd+Ctrl+Shift+-`: nudge every tiled window width down by `0.1`.
-- `Cmd+Ctrl+Shift+=`: nudge every tiled window width up by `0.1`.
+| Shortcut | Action |
+| :------- | :----- |
+| `Cmd+1`..`Cmd+9` | Focus workspace by dynamic index |
+| `Cmd+0` | Focus the previous workspace |
+| `Cmd+J` / `Cmd+K` | Focus workspace down / up |
+| `Cmd+H` / `Cmd+L` | Focus column left / right |
+| `Cmd+[` / `Cmd+]` | Focus first / last column |
+| `Cmd+Home` / `Cmd+End` | Focus first / last column |
+| `Cmd+Shift+1`..`Cmd+Shift+9` | Move column to workspace |
+| `Cmd+Shift+J` / `Cmd+Shift+K` | Move column workspace down / up |
+| `Cmd+Shift+H` / `Cmd+Shift+L` | Move column left / right |
+| `Cmd+Shift+[` / `Cmd+Shift+]` | Move column to first / last |
+| `Cmd+Ctrl+H` / `Cmd+Ctrl+L` | Cycle active column width preset |
+| `Cmd+Ctrl+-` / `Cmd+Ctrl+=` | Nudge active column width |
+| `Cmd+Ctrl+Shift+H` / `Cmd+Ctrl+Shift+L` | Cycle every tiled window width preset |
+| `Cmd+Ctrl+Shift+-` / `Cmd+Ctrl+Shift+=` | Nudge every tiled window width |
 
-Everything else passes through. In particular, `Cmd+Tab` remains macOS app
-switching; after macOS focuses a managed window, scrollini adopts that window's
-stored workspace and column and reprojects the layout.
-`excluded_keybindings` can pass specific shortcuts through before scrollini maps
-them. The default excludes `cmd+shift+5` so macOS screen recording keeps
-working.
-
-The alpha hiding path uses private SkyLight symbols. If those symbols are not
-available on a macOS build, scrollini falls back to the side-edge parked placement.
-
-On exit, scrollini restores tiled windows to alpha `1` and moves them to the visible
-maximized frame. Floating windows are left in place with alpha `1`. It also
-starts a small watcher process with a restore snapshot; if the main process
-crashes or is killed, the watcher restores tiled windows to the same maximized
-visible state.
+Everything else passes through. The default config excludes `Cmd+Shift+5`, so
+macOS screen recording keeps working.
 
 ## Config
 
-scrollini loads the first config file it can read from:
+scrollini loads the first config file it can read:
 
 - `SCROLLINI_CONFIG`
 - `./scrollini.config.json`
-- `$XDG_CONFIG_HOME/scrollini/config.json`, or `~/.config/scrollini/config.json`
+- `$XDG_CONFIG_HOME/scrollini/config.json`
+- `~/.config/scrollini/config.json`
 
 The repo includes this default:
 
@@ -114,15 +103,28 @@ The repo includes this default:
 }
 ```
 
-## Run
+Rules can match on `bundle_id`, `app_name`, or `title_contains`. Use
+`behavior: "ignore"` for windows scrollini should leave alone, `behavior: "float"`
+for visible untiled windows, and `width_ratio` to override an app's default
+column width.
 
-```sh
+## Development
+
+```bash
+swift build
 swift run Scrollini
 ```
 
-The process needs Accessibility permission. If launched from a terminal, macOS
-may require the terminal app itself to have Accessibility access.
+## Notes
 
-## License
+- scrollini targets macOS 13+ and Swift 6.
+- It uses public Accessibility APIs for the core window control path.
+- The SkyLight path is private and optional; if it is unavailable, hidden
+  windows stay parked as side-edge slivers.
+- This does not use native macOS Spaces.
 
-MIT. See [LICENSE](LICENSE).
+## Links
+
+- Repository: https://github.com/krishkalaria12/scrollini
+- Research notes: [docs/macos-window-management-investigation.md](docs/macos-window-management-investigation.md)
+- Niri behavior notes: [docs/niri-mvp-behavior-notes.md](docs/niri-mvp-behavior-notes.md)
