@@ -46,6 +46,8 @@ normal app windows into a virtual grid:
 - `Cmd+K`: workspace up.
 - `Cmd+H`: column left.
 - `Cmd+L`: column right.
+- `Cmd+[` / `Cmd+{` or `Cmd+Home`: first column.
+- `Cmd+]` / `Cmd+}` or `Cmd+End`: last column.
 - `Cmd+Shift+1` ... `Cmd+Shift+9`: move active column to workspace by
   dynamic index. Indexes past the current count clamp to the bottom empty
   workspace.
@@ -53,6 +55,8 @@ normal app windows into a virtual grid:
 - `Cmd+Shift+K`: move active column to workspace up.
 - `Cmd+Shift+H`: move active column left.
 - `Cmd+Shift+L`: move active column right.
+- `Cmd+Shift+[` / `Cmd+Shift+{` or `Cmd+Shift+Home`: move active column to first.
+- `Cmd+Shift+]` / `Cmd+Shift+}` or `Cmd+Shift+End`: move active column to last.
 - `Cmd+Ctrl+H`: cycle active column to previous width preset.
 - `Cmd+Ctrl+L`: cycle active column to next width preset.
 - `Cmd+Ctrl+-`: nudge active column width down by `0.1`.

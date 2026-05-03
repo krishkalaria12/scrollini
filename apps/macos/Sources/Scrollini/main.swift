@@ -21,6 +21,10 @@ private enum KeyCode {
     static let l: Int64 = 37
     static let equal: Int64 = 24
     static let minus: Int64 = 27
+    static let home: Int64 = 115
+    static let end: Int64 = 119
+    static let leftBracket: Int64 = 33
+    static let rightBracket: Int64 = 30
 }
 
 private enum Command {
@@ -30,8 +34,12 @@ private enum Command {
     case workspaceUp
     case columnLeft
     case columnRight
+    case columnFirst
+    case columnLast
     case moveColumnLeft
     case moveColumnRight
+    case moveColumnToFirst
+    case moveColumnToLast
     case moveColumnToWorkspace(Int)
     case moveColumnToWorkspaceDown
     case moveColumnToWorkspaceUp
@@ -483,7 +491,9 @@ private final class Scrollini: NSObject, @unchecked Sendable {
 
         print("scrollini: running")
         print("scrollini: Cmd+1..9 focus workspace, Cmd+0 previous workspace, Cmd+J/K workspace down/up, Cmd+H/L column left/right")
+        print("scrollini: Cmd+[/] or Cmd+Home/End focus first/last column")
         print("scrollini: Cmd+Shift+1..9 move column to workspace, Cmd+Shift+J/K move column down/up, Cmd+Shift+H/L move column left/right")
+        print("scrollini: Cmd+Shift+[/] or Cmd+Shift+Home/End move column to first/last")
         print("scrollini: Cmd+Ctrl+H/L cycle width presets, Cmd+Ctrl+-/= nudge width by 0.1")
         print("scrollini: Cmd+Ctrl+Shift+H/L cycle width presets for all windows, Cmd+Ctrl+Shift+-/= nudge all widths")
         print("scrollini: Cmd-Tab is passed through and adopted after macOS focuses a window")
@@ -598,6 +608,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let keyText = keyboardText(from: event)
         let command: Command?
         if modifiers == .maskCommand {
             switch keyCode {
@@ -615,6 +626,10 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             case KeyCode.j: command = .workspaceDown
             case KeyCode.k: command = .workspaceUp
             case KeyCode.l: command = .columnRight
+            case KeyCode.leftBracket, KeyCode.home: command = .columnFirst
+            case KeyCode.rightBracket, KeyCode.end: command = .columnLast
+            case _ where keyText == "{" || keyText == "[": command = .columnFirst
+            case _ where keyText == "}" || keyText == "]": command = .columnLast
             default: command = nil
             }
         } else if modifiers == [.maskCommand, .maskShift] {
@@ -632,6 +647,10 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             case KeyCode.j: command = .moveColumnToWorkspaceDown
             case KeyCode.k: command = .moveColumnToWorkspaceUp
             case KeyCode.l: command = .moveColumnRight
+            case KeyCode.leftBracket, KeyCode.home: command = .moveColumnToFirst
+            case KeyCode.rightBracket, KeyCode.end: command = .moveColumnToLast
+            case _ where keyText == "{" || keyText == "[": command = .moveColumnToFirst
+            case _ where keyText == "}" || keyText == "]": command = .moveColumnToLast
             default: command = nil
             }
         } else if modifiers == [.maskCommand, .maskControl] {
@@ -660,6 +679,18 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             self?.perform(command)
         }
         return true
+    }
+
+    private func keyboardText(from event: CGEvent) -> String {
+        var length = 0
+        event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
+        guard length > 0 else {
+            return ""
+        }
+
+        var chars = [UniChar](repeating: 0, count: length)
+        event.keyboardGetUnicodeString(maxStringLength: length, actualStringLength: &length, unicodeString: &chars)
+        return String(utf16CodeUnits: chars, count: length)
     }
 
     fileprivate func handleMouseMoved(_ event: CGEvent) {
@@ -728,12 +759,34 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             workspace.activeColumn = min(workspace.activeColumn + 1, workspace.columns.count - 1)
             workspace.scrollOffset = nil
             animated = true
+        case .columnFirst:
+            guard focusColumn(at: 0) else {
+                return
+            }
+            animated = true
+        case .columnLast:
+            guard let workspace = activeWorkspaceObject() else {
+                return
+            }
+            guard focusColumn(at: workspace.columns.count - 1) else {
+                return
+            }
+            animated = true
         case .moveColumnLeft:
             seedPresentationFrames(from: previousState)
             animated = moveActiveColumnHorizontally(by: -1)
         case .moveColumnRight:
             seedPresentationFrames(from: previousState)
             animated = moveActiveColumnHorizontally(by: 1)
+        case .moveColumnToFirst:
+            seedPresentationFrames(from: previousState)
+            animated = moveActiveColumn(to: 0)
+        case .moveColumnToLast:
+            seedPresentationFrames(from: previousState)
+            guard let workspace = activeWorkspaceObject() else {
+                return
+            }
+            animated = moveActiveColumn(to: workspace.columns.count - 1)
         case .moveColumnToWorkspace(let oneBasedIndex):
             moveActiveColumnToWorkspace(oneBasedIndex: oneBasedIndex)
         case .moveColumnToWorkspaceDown:
@@ -833,14 +886,37 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         return workspaces.firstIndex(where: { $0 === previousWorkspace })
     }
 
+    private func focusColumn(at requestedIndex: Int) -> Bool {
+        guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
+            return false
+        }
+
+        let targetIndex = min(max(requestedIndex, 0), workspace.columns.count - 1)
+        workspace.activeColumn = targetIndex
+        workspace.scrollOffset = nil
+        return true
+    }
+
     private func moveActiveColumnHorizontally(by delta: Int) -> Bool {
         guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
             return false
         }
 
         workspace.clampFocus()
+        return moveActiveColumn(to: workspace.activeColumn + delta)
+    }
+
+    private func moveActiveColumn(to requestedIndex: Int) -> Bool {
+        guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
+            return false
+        }
+
+        workspace.clampFocus()
         let sourceIndex = workspace.activeColumn
-        let targetIndex = sourceIndex + delta
+        let targetIndex = min(max(requestedIndex, 0), workspace.columns.count - 1)
+        guard sourceIndex != targetIndex else {
+            return false
+        }
         guard workspace.columns.indices.contains(targetIndex) else {
             return false
         }
