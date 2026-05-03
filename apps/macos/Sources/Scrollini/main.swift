@@ -14,6 +14,7 @@ private enum KeyCode {
     static let seven: Int64 = 26
     static let eight: Int64 = 28
     static let nine: Int64 = 25
+    static let zero: Int64 = 29
     static let h: Int64 = 4
     static let j: Int64 = 38
     static let k: Int64 = 40
@@ -24,6 +25,7 @@ private enum KeyCode {
 
 private enum Command {
     case focusWorkspace(Int)
+    case focusPreviousWorkspace
     case workspaceDown
     case workspaceUp
     case columnLeft
@@ -75,6 +77,7 @@ private struct ScrolliniConfig: Codable {
     var hoverToFocus: Bool?
     var hoverFocusDelayMS: Int?
     var hoverFocusMaxScrollRatio: CGFloat?
+    var workspaceAutoBackAndForth: Bool?
     var rules: [WindowRule]
 
     static let fallback = ScrolliniConfig(
@@ -84,6 +87,7 @@ private struct ScrolliniConfig: Codable {
         hoverToFocus: true,
         hoverFocusDelayMS: 120,
         hoverFocusMaxScrollRatio: 0.15,
+        workspaceAutoBackAndForth: true,
         rules: [
             WindowRule(bundleID: "com.apple.finder", behavior: .ignore),
             WindowRule(bundleID: "com.t3tools.t3code", widthRatio: 1.0),
@@ -163,6 +167,7 @@ private struct ScrolliniConfig: Codable {
         case hoverToFocus = "hover_to_focus"
         case hoverFocusDelayMS = "hover_focus_delay_ms"
         case hoverFocusMaxScrollRatio = "hover_focus_max_scroll_ratio"
+        case workspaceAutoBackAndForth = "workspace_auto_back_and_forth"
         case rules
     }
 }
@@ -441,6 +446,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
     private var workspaces: [Workspace] = [Workspace()]
     private var floatingWindows: [ManagedWindow] = []
     private var activeWorkspace: Int = 0
+    private weak var previousWorkspace: Workspace?
     private var observers: [pid_t: AXObserver] = [:]
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
@@ -476,7 +482,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         print("scrollini: running")
-        print("scrollini: Cmd+1..9 focus workspace, Cmd+J/K workspace down/up, Cmd+H/L column left/right")
+        print("scrollini: Cmd+1..9 focus workspace, Cmd+0 previous workspace, Cmd+J/K workspace down/up, Cmd+H/L column left/right")
         print("scrollini: Cmd+Shift+1..9 move column to workspace, Cmd+Shift+J/K move column down/up, Cmd+Shift+H/L move column left/right")
         print("scrollini: Cmd+Ctrl+H/L cycle width presets, Cmd+Ctrl+-/= nudge width by 0.1")
         print("scrollini: Cmd+Ctrl+Shift+H/L cycle width presets for all windows, Cmd+Ctrl+Shift+-/= nudge all widths")
@@ -604,6 +610,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             case KeyCode.seven: command = .focusWorkspace(7)
             case KeyCode.eight: command = .focusWorkspace(8)
             case KeyCode.nine: command = .focusWorkspace(9)
+            case KeyCode.zero: command = .focusPreviousWorkspace
             case KeyCode.h: command = .columnLeft
             case KeyCode.j: command = .workspaceDown
             case KeyCode.k: command = .workspaceUp
@@ -693,10 +700,20 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         switch command {
         case .focusWorkspace(let oneBasedIndex):
             focusWorkspace(oneBasedIndex)
+        case .focusPreviousWorkspace:
+            guard focusPreviousWorkspace() else {
+                return
+            }
         case .workspaceDown:
-            activeWorkspace = min(activeWorkspace + 1, workspaces.count - 1)
+            guard setActiveWorkspace(activeWorkspace + 1) else {
+                return
+            }
+            activeWorkspaceObject()?.clampFocus()
         case .workspaceUp:
-            activeWorkspace = max(activeWorkspace - 1, 0)
+            guard setActiveWorkspace(activeWorkspace - 1) else {
+                return
+            }
+            activeWorkspaceObject()?.clampFocus()
         case .columnLeft:
             guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
                 return
@@ -762,9 +779,58 @@ private final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func focusWorkspace(_ oneBasedIndex: Int) {
-        let zeroBased = max(0, oneBasedIndex - 1)
-        activeWorkspace = min(zeroBased, workspaces.count - 1)
+        guard !workspaces.isEmpty else {
+            return
+        }
+
+        let requestedIndex = min(max(oneBasedIndex - 1, 0), workspaces.count - 1)
+        let targetIndex = workspaceAutoBackAndForth && requestedIndex == activeWorkspace
+            ? previousWorkspaceIndex() ?? requestedIndex
+            : requestedIndex
+
+        setActiveWorkspace(targetIndex)
         activeWorkspaceObject()?.clampFocus()
+    }
+
+    private func focusPreviousWorkspace() -> Bool {
+        guard let previousIndex = previousWorkspaceIndex(),
+              previousIndex != activeWorkspace
+        else {
+            return false
+        }
+
+        setActiveWorkspace(previousIndex)
+        activeWorkspaceObject()?.clampFocus()
+        return true
+    }
+
+    @discardableResult
+    private func setActiveWorkspace(_ requestedIndex: Int, rememberPrevious: Bool = true) -> Bool {
+        guard !workspaces.isEmpty else {
+            activeWorkspace = 0
+            previousWorkspace = nil
+            return false
+        }
+
+        let targetIndex = min(max(requestedIndex, 0), workspaces.count - 1)
+        guard targetIndex != activeWorkspace else {
+            return false
+        }
+
+        let currentWorkspace = activeWorkspaceObject()
+        activeWorkspace = targetIndex
+        if rememberPrevious {
+            previousWorkspace = currentWorkspace
+        }
+        return true
+    }
+
+    private func previousWorkspaceIndex() -> Int? {
+        guard let previousWorkspace else {
+            return nil
+        }
+
+        return workspaces.firstIndex(where: { $0 === previousWorkspace })
     }
 
     private func moveActiveColumnHorizontally(by delta: Int) -> Bool {
@@ -931,7 +997,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         targetWorkspace.activeColumn = insertionIndex
         targetWorkspace.scrollOffset = nil
 
-        activeWorkspace = targetIndex
+        setActiveWorkspace(targetIndex)
         ensureTrailingEmptyWorkspace()
         activeWorkspace = workspaces.firstIndex(where: { $0 === targetWorkspace }) ?? activeWorkspace
         return true
@@ -1124,7 +1190,9 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         workspace.columns.insert(window, at: insertionIndex)
         workspace.activeColumn = insertionIndex
         workspace.scrollOffset = nil
-        activeWorkspace = workspaces.firstIndex(where: { $0 === workspace }) ?? activeWorkspace
+        if let workspaceIndex = workspaces.firstIndex(where: { $0 === workspace }) {
+            setActiveWorkspace(workspaceIndex, rememberPrevious: false)
+        }
         ensureTrailingEmptyWorkspace()
         projectLayout(focusActiveWindow: true)
     }
@@ -1160,6 +1228,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         if workspaces.isEmpty {
             workspaces = [Workspace()]
             activeWorkspace = 0
+            previousWorkspace = nil
             return
         }
 
@@ -1203,6 +1272,10 @@ private final class Scrollini: NSObject, @unchecked Sendable {
 
     private var hoverFocusMaxScrollRatio: CGFloat {
         config.hoverFocusMaxScrollRatio ?? ScrolliniConfig.fallback.hoverFocusMaxScrollRatio ?? 0.15
+    }
+
+    private var workspaceAutoBackAndForth: Bool {
+        config.workspaceAutoBackAndForth ?? ScrolliniConfig.fallback.workspaceAutoBackAndForth ?? true
     }
 
     private var widthPresetRatios: [CGFloat] {
@@ -1473,7 +1546,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         let previousState = captureLayoutState()
-        activeWorkspace = workspaceIndex
+        setActiveWorkspace(workspaceIndex)
         workspace.activeColumn = columnIndex
         workspace.scrollOffset = nil
         let newState = captureLayoutState()
@@ -1848,7 +1921,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         let newScrollOffset = virtualOrigin - (frame.minX - viewport.minX)
 
         location.workspace.scrollOffset = newScrollOffset
-        activeWorkspace = location.workspaceIndex
+        setActiveWorkspace(location.workspaceIndex)
         location.workspace.activeColumn = location.columnIndex
         presentationFrames[ObjectIdentifier(location.window)] = frame
 
@@ -1946,7 +2019,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         if let loc = location(of: focusedElement) {
-            activeWorkspace = loc.workspace
+            setActiveWorkspace(loc.workspace)
             let workspace = workspaces[loc.workspace]
             workspace.activeColumn = loc.column
             workspace.scrollOffset = nil

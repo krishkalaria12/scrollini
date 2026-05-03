@@ -8,6 +8,8 @@ normal app windows into a virtual grid:
 - Workspaces are rows.
 - Windows are columns inside a workspace. By default each column is `0.8` of
   the screen width, so the next column can peek in while you scroll sideways.
+- Scrollini remembers the previous workspace. `workspace_auto_back_and_forth` makes
+  pressing the current workspace number jump back to it.
 - App rules can override column width ratios. A `1.0` ratio occupies the whole
   screen width; larger ratios are allowed and grow beyond the screen.
 - `preset_width_ratios` can define quick active-column width presets. Preset
@@ -39,6 +41,7 @@ normal app windows into a virtual grid:
 
 - `Cmd+1` ... `Cmd+9`: focus workspace by dynamic index. Indexes past the
   current count clamp to the bottom empty workspace, matching Niri's behavior.
+- `Cmd+0`: focus the previous workspace.
 - `Cmd+J`: workspace down.
 - `Cmd+K`: workspace up.
 - `Cmd+H`: column left.
@@ -90,6 +93,7 @@ The repo includes this default:
   "hover_to_focus": true,
   "hover_focus_delay_ms": 120,
   "hover_focus_max_scroll_ratio": 0.15,
+  "workspace_auto_back_and_forth": true,
   "rules": [
     {
       "bundle_id": "com.apple.finder",
