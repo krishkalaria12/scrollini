@@ -86,6 +86,8 @@ private struct ScrolliniConfig: Codable {
     var hoverFocusDelayMS: Int?
     var hoverFocusMaxScrollRatio: CGFloat?
     var workspaceAutoBackAndForth: Bool?
+    var centerFocusedColumn: Bool?
+    var excludedKeybindings: [String]?
     var rules: [WindowRule]
 
     static let fallback = ScrolliniConfig(
@@ -96,6 +98,8 @@ private struct ScrolliniConfig: Codable {
         hoverFocusDelayMS: 120,
         hoverFocusMaxScrollRatio: 0.15,
         workspaceAutoBackAndForth: true,
+        centerFocusedColumn: true,
+        excludedKeybindings: ["cmd+shift+5"],
         rules: [
             WindowRule(bundleID: "com.apple.finder", behavior: .ignore),
             WindowRule(bundleID: "com.t3tools.t3code", widthRatio: 1.0),
@@ -176,6 +180,8 @@ private struct ScrolliniConfig: Codable {
         case hoverFocusDelayMS = "hover_focus_delay_ms"
         case hoverFocusMaxScrollRatio = "hover_focus_max_scroll_ratio"
         case workspaceAutoBackAndForth = "workspace_auto_back_and_forth"
+        case centerFocusedColumn = "center_focused_column"
+        case excludedKeybindings = "excluded_keybindings"
         case rules
     }
 }
@@ -609,6 +615,10 @@ private final class Scrollini: NSObject, @unchecked Sendable {
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let keyText = keyboardText(from: event)
+        guard !isExcludedKeybinding(modifiers: modifiers, keyCode: keyCode, keyText: keyText) else {
+            return false
+        }
+
         let command: Command?
         if modifiers == .maskCommand {
             switch keyCode {
@@ -691,6 +701,144 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         var chars = [UniChar](repeating: 0, count: length)
         event.keyboardGetUnicodeString(maxStringLength: length, actualStringLength: &length, unicodeString: &chars)
         return String(utf16CodeUnits: chars, count: length)
+    }
+
+    private func isExcludedKeybinding(modifiers: CGEventFlags, keyCode: Int64, keyText: String) -> Bool {
+        let excluded = Set((config.excludedKeybindings ?? ScrolliniConfig.fallback.excludedKeybindings ?? [])
+            .compactMap(normalizedKeybinding(_:)))
+        guard !excluded.isEmpty else {
+            return false
+        }
+
+        let modifierParts = normalizedModifierParts(from: modifiers)
+        for keyName in normalizedKeyNames(keyCode: keyCode, keyText: keyText) {
+            let candidate = (modifierParts + [keyName]).joined(separator: "+")
+            if excluded.contains(candidate) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func normalizedKeybinding(_ binding: String) -> String? {
+        let parts = binding
+            .lowercased()
+            .split(separator: "+")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var modifiers = Set<String>()
+        var key: String?
+        for part in parts {
+            switch part {
+            case "cmd", "command":
+                modifiers.insert("cmd")
+            case "ctrl", "control":
+                modifiers.insert("ctrl")
+            case "shift":
+                modifiers.insert("shift")
+            case "alt", "option", "alternate":
+                modifiers.insert("alt")
+            default:
+                key = normalizedKeyName(part)
+            }
+        }
+
+        guard let key else {
+            return nil
+        }
+
+        return (orderedModifierParts(from: modifiers) + [key]).joined(separator: "+")
+    }
+
+    private func normalizedModifierParts(from modifiers: CGEventFlags) -> [String] {
+        var names = Set<String>()
+        if modifiers.contains(.maskCommand) {
+            names.insert("cmd")
+        }
+        if modifiers.contains(.maskControl) {
+            names.insert("ctrl")
+        }
+        if modifiers.contains(.maskShift) {
+            names.insert("shift")
+        }
+        if modifiers.contains(.maskAlternate) {
+            names.insert("alt")
+        }
+        return orderedModifierParts(from: names)
+    }
+
+    private func orderedModifierParts(from modifiers: Set<String>) -> [String] {
+        ["cmd", "ctrl", "shift", "alt"].filter { modifiers.contains($0) }
+    }
+
+    private func normalizedKeyNames(keyCode: Int64, keyText: String) -> [String] {
+        var names: [String] = []
+        let add: (String) -> Void = { name in
+            let normalized = self.normalizedKeyName(name)
+            if !names.contains(normalized) {
+                names.append(normalized)
+            }
+        }
+
+        if !keyText.isEmpty {
+            add(keyText)
+        }
+
+        switch keyCode {
+        case KeyCode.one: add("1")
+        case KeyCode.two: add("2")
+        case KeyCode.three: add("3")
+        case KeyCode.four: add("4")
+        case KeyCode.five: add("5")
+        case KeyCode.six: add("6")
+        case KeyCode.seven: add("7")
+        case KeyCode.eight: add("8")
+        case KeyCode.nine: add("9")
+        case KeyCode.zero: add("0")
+        case KeyCode.h: add("h")
+        case KeyCode.j: add("j")
+        case KeyCode.k: add("k")
+        case KeyCode.l: add("l")
+        case KeyCode.minus:
+            add("-")
+            add("minus")
+        case KeyCode.equal:
+            add("=")
+            add("equal")
+        case KeyCode.home: add("home")
+        case KeyCode.end: add("end")
+        case KeyCode.leftBracket:
+            add("[")
+            add("{")
+        case KeyCode.rightBracket:
+            add("]")
+            add("}")
+        default:
+            break
+        }
+
+        return names
+    }
+
+    private func normalizedKeyName(_ key: String) -> String {
+        switch key {
+        case "leftbracket", "left-bracket", "openbracket", "open-bracket":
+            return "["
+        case "rightbracket", "right-bracket", "closebracket", "close-bracket":
+            return "]"
+        case "leftbrace", "left-brace", "openbrace", "open-brace":
+            return "{"
+        case "rightbrace", "right-brace", "closebrace", "close-brace":
+            return "}"
+        case "minus":
+            return "-"
+        case "equal":
+            return "="
+        default:
+            return key
+        }
     }
 
     fileprivate func handleMouseMoved(_ event: CGEvent) {
@@ -1354,6 +1502,10 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         config.workspaceAutoBackAndForth ?? ScrolliniConfig.fallback.workspaceAutoBackAndForth ?? true
     }
 
+    private var centerFocusedColumn: Bool {
+        config.centerFocusedColumn ?? ScrolliniConfig.fallback.centerFocusedColumn ?? true
+    }
+
     private var widthPresetRatios: [CGFloat] {
         config.presetWidthRatios ?? ScrolliniConfig.fallback.presetWidthRatios ?? [0.5, 0.67, 0.8, 1.0]
     }
@@ -1833,7 +1985,11 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         let metrics = stripMetrics(for: workspace, viewport: viewport)
-        let scrollOffset = preferredScrollOffset ?? metrics.origins[activeColumn]
+        let scrollOffset = preferredScrollOffset ?? defaultScrollOffset(
+            metrics: metrics,
+            activeColumn: activeColumn,
+            viewport: viewport
+        )
         return workspace.columns.indices.map { index in
             CGRect(
                 x: viewport.minX + metrics.origins[index] - scrollOffset,
@@ -1857,6 +2013,23 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         return (origins, widths)
+    }
+
+    private func defaultScrollOffset(
+        metrics: (origins: [CGFloat], widths: [CGFloat]),
+        activeColumn: Int,
+        viewport: CGRect
+    ) -> CGFloat {
+        guard centerFocusedColumn,
+              activeColumn > 0,
+              metrics.origins.indices.contains(activeColumn),
+              metrics.widths.indices.contains(activeColumn)
+        else {
+            return metrics.origins.indices.contains(activeColumn) ? metrics.origins[activeColumn] : 0
+        }
+
+        let activeCenter = metrics.origins[activeColumn] + metrics.widths[activeColumn] / 2
+        return max(0, activeCenter - viewport.width / 2)
     }
 
     private func parkedFrame(for window: ManagedWindow, viewport: CGRect, beforeActive: Bool) -> CGRect {

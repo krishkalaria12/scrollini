@@ -8,6 +8,8 @@ normal app windows into a virtual grid:
 - Workspaces are rows.
 - Windows are columns inside a workspace. By default each column is `0.8` of
   the screen width, so the next column can peek in while you scroll sideways.
+- `center_focused_column` keeps the focused column centered when possible.
+  The first column remains pinned to the left edge.
 - Scrollini remembers the previous workspace. `workspace_auto_back_and_forth` makes
   pressing the current workspace number jump back to it.
 - App rules can override column width ratios. A `1.0` ratio occupies the whole
@@ -69,6 +71,9 @@ normal app windows into a virtual grid:
 Everything else passes through. In particular, `Cmd+Tab` remains macOS app
 switching; after macOS focuses a managed window, scrollini adopts that window's
 stored workspace and column and reprojects the layout.
+`excluded_keybindings` can pass specific shortcuts through before scrollini maps
+them. The default excludes `cmd+shift+5` so macOS screen recording keeps
+working.
 
 The alpha hiding path uses private SkyLight symbols. If those symbols are not
 available on a macOS build, scrollini falls back to the side-edge parked placement.
@@ -98,6 +103,8 @@ The repo includes this default:
   "hover_focus_delay_ms": 120,
   "hover_focus_max_scroll_ratio": 0.15,
   "workspace_auto_back_and_forth": true,
+  "center_focused_column": true,
+  "excluded_keybindings": ["cmd+shift+5"],
   "rules": [
     {
       "bundle_id": "com.apple.finder",
