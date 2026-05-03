@@ -12,18 +12,6 @@
     {
       "bundle_id": "com.apple.finder",
       "behavior": "ignore"
-    },
-    {
-      "bundle_id": "com.t3tools.t3code",
-      "width_ratio": 1.0
-    },
-    {
-      "app_name": "T3 Code (Nightly)",
-      "width_ratio": 1.0
-    },
-    {
-      "title_contains": "T3 Code",
-      "width_ratio": 1.0
     }
   ]
 }

@@ -1,0 +1,85 @@
+import ApplicationServices
+import CoreGraphics
+import Darwin
+import Foundation
+
+final class ManagedWindow {
+    let element: AXUIElement
+    let pid: pid_t
+    let windowID: UInt32?
+    var bundleID: String?
+    var appName: String
+    var title: String
+    var manualWidthRatio: CGFloat?
+
+    init(element: AXUIElement, pid: pid_t, windowID: UInt32?, bundleID: String?, appName: String, title: String) {
+        self.element = element
+        self.pid = pid
+        self.windowID = windowID
+        self.bundleID = bundleID
+        self.appName = appName
+        self.title = title
+    }
+}
+
+final class Workspace {
+    var columns: [ManagedWindow] = []
+    var activeColumn: Int = 0
+    var scrollOffset: CGFloat?
+
+    var isEmpty: Bool {
+        columns.isEmpty
+    }
+
+    func clampFocus() {
+        if columns.isEmpty {
+            activeColumn = 0
+            scrollOffset = nil
+        } else {
+            activeColumn = min(max(activeColumn, 0), columns.count - 1)
+        }
+    }
+}
+
+struct RestoreSnapshot: Codable {
+    var windowIDs: [UInt32]
+    var viewport: RectSnapshot
+}
+
+struct RectSnapshot: Codable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+
+    init(_ rect: CGRect) {
+        x = rect.origin.x
+        y = rect.origin.y
+        width = rect.width
+        height = rect.height
+    }
+
+    var cgRect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
+    }
+}
+
+struct LayoutState: Equatable {
+    var activeWorkspace: Int
+    var activeColumns: [Int]
+    var scrollOffsets: [CGFloat?]
+}
+
+struct LayoutItem {
+    var window: ManagedWindow
+    var frame: CGRect
+    var visible: Bool
+}
+
+struct WindowMotion {
+    var window: ManagedWindow
+    var startFrame: CGRect
+    var endFrame: CGRect
+    var participates: Bool
+    var sizeStable: Bool
+}

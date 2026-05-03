@@ -1,7 +1,6 @@
 # Niri Behavior Notes for the Swift MVP
 
-BTCA repo: `~/.btca/agent/sandbox/niri`
-Commit inspected: `1f07cffa`
+Niri commit inspected: `1f07cffa`
 
 ## Source Behavior
 

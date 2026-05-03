@@ -74,10 +74,10 @@ sample run saw 17 windows, including regular app windows and menu bar/control
 center windows.
 
 Accessibility can see and control normal app windows. On this machine,
-`kAXPositionAttribute` and `kAXSizeAttribute` were settable for Helium, Zed,
-Legcord, T3 Code, Electron, and Ghostty.
+`kAXPositionAttribute` and `kAXSizeAttribute` were settable for several regular
+third-party app windows.
 
-A reversible one-pixel move on Ghostty succeeded:
+A reversible one-pixel move on a regular terminal window succeeded:
 
 ```text
 original=(0.0, 29.0)

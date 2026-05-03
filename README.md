@@ -109,27 +109,10 @@ The repo includes this default:
     {
       "bundle_id": "com.apple.finder",
       "behavior": "ignore"
-    },
-    {
-      "bundle_id": "com.t3tools.t3code",
-      "width_ratio": 1.0
-    },
-    {
-      "app_name": "T3 Code (Nightly)",
-      "width_ratio": 1.0
-    },
-    {
-      "title_contains": "T3 Code",
-      "width_ratio": 1.0
     }
   ]
 }
 ```
-
-The current T3 Code identifiers observed from running apps are:
-
-- `T3 Code (Nightly)`: bundle id `com.t3tools.t3code`, title `T3 Code (Nightly)`
-- `Electron`: bundle id `com.github.Electron`, title `T3 Code (Dev)`
 
 ## Run
 
@@ -139,3 +122,7 @@ swift run Scrollini
 
 The process needs Accessibility permission. If launched from a terminal, macOS
 may require the terminal app itself to have Accessibility access.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
