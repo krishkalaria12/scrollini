@@ -35,6 +35,13 @@ normal app windows into a virtual grid:
 - `Cmd+K`: workspace up.
 - `Cmd+H`: column left.
 - `Cmd+L`: column right.
+- `Cmd+Shift+1` ... `Cmd+Shift+9`: move active column to workspace by
+  dynamic index. Indexes past the current count clamp to the bottom empty
+  workspace.
+- `Cmd+Shift+J`: move active column to workspace down.
+- `Cmd+Shift+K`: move active column to workspace up.
+- `Cmd+Shift+H`: move active column left.
+- `Cmd+Shift+L`: move active column right.
 
 Everything else passes through. In particular, `Cmd+Tab` remains macOS app
 switching; after macOS focuses a managed window, scrollini adopts that window's

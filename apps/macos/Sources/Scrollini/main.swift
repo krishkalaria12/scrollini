@@ -26,6 +26,11 @@ private enum Command {
     case workspaceUp
     case columnLeft
     case columnRight
+    case moveColumnLeft
+    case moveColumnRight
+    case moveColumnToWorkspace(Int)
+    case moveColumnToWorkspaceDown
+    case moveColumnToWorkspaceUp
 }
 
 private final class ManagedWindow {
@@ -436,6 +441,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
 
         print("scrollini: running")
         print("scrollini: Cmd+1..9 focus workspace, Cmd+J/K workspace down/up, Cmd+H/L column left/right")
+        print("scrollini: Cmd+Shift+1..9 move column to workspace, Cmd+Shift+J/K move column down/up, Cmd+Shift+H/L move column left/right")
         print("scrollini: Cmd-Tab is passed through and adopted after macOS focuses a window")
         if !SkyLight.shared.canSetAlpha {
             print("scrollini: SkyLight alpha support unavailable; parked windows will remain as edge slivers")
@@ -539,27 +545,46 @@ private final class Scrollini: NSObject, @unchecked Sendable {
 
     fileprivate func handleKeyEvent(_ event: CGEvent) -> Bool {
         let modifiers = event.flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate])
-        guard modifiers == .maskCommand else {
+        guard modifiers == .maskCommand || modifiers == [.maskCommand, .maskShift] else {
             return false
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let command: Command?
-        switch keyCode {
-        case KeyCode.one: command = .focusWorkspace(1)
-        case KeyCode.two: command = .focusWorkspace(2)
-        case KeyCode.three: command = .focusWorkspace(3)
-        case KeyCode.four: command = .focusWorkspace(4)
-        case KeyCode.five: command = .focusWorkspace(5)
-        case KeyCode.six: command = .focusWorkspace(6)
-        case KeyCode.seven: command = .focusWorkspace(7)
-        case KeyCode.eight: command = .focusWorkspace(8)
-        case KeyCode.nine: command = .focusWorkspace(9)
-        case KeyCode.h: command = .columnLeft
-        case KeyCode.j: command = .workspaceDown
-        case KeyCode.k: command = .workspaceUp
-        case KeyCode.l: command = .columnRight
-        default: command = nil
+        if modifiers == .maskCommand {
+            switch keyCode {
+            case KeyCode.one: command = .focusWorkspace(1)
+            case KeyCode.two: command = .focusWorkspace(2)
+            case KeyCode.three: command = .focusWorkspace(3)
+            case KeyCode.four: command = .focusWorkspace(4)
+            case KeyCode.five: command = .focusWorkspace(5)
+            case KeyCode.six: command = .focusWorkspace(6)
+            case KeyCode.seven: command = .focusWorkspace(7)
+            case KeyCode.eight: command = .focusWorkspace(8)
+            case KeyCode.nine: command = .focusWorkspace(9)
+            case KeyCode.h: command = .columnLeft
+            case KeyCode.j: command = .workspaceDown
+            case KeyCode.k: command = .workspaceUp
+            case KeyCode.l: command = .columnRight
+            default: command = nil
+            }
+        } else {
+            switch keyCode {
+            case KeyCode.one: command = .moveColumnToWorkspace(1)
+            case KeyCode.two: command = .moveColumnToWorkspace(2)
+            case KeyCode.three: command = .moveColumnToWorkspace(3)
+            case KeyCode.four: command = .moveColumnToWorkspace(4)
+            case KeyCode.five: command = .moveColumnToWorkspace(5)
+            case KeyCode.six: command = .moveColumnToWorkspace(6)
+            case KeyCode.seven: command = .moveColumnToWorkspace(7)
+            case KeyCode.eight: command = .moveColumnToWorkspace(8)
+            case KeyCode.nine: command = .moveColumnToWorkspace(9)
+            case KeyCode.h: command = .moveColumnLeft
+            case KeyCode.j: command = .moveColumnToWorkspaceDown
+            case KeyCode.k: command = .moveColumnToWorkspaceUp
+            case KeyCode.l: command = .moveColumnRight
+            default: command = nil
+            }
         }
 
         guard let command else {
@@ -617,6 +642,18 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             workspace.activeColumn = min(workspace.activeColumn + 1, workspace.columns.count - 1)
             workspace.scrollOffset = nil
             animated = true
+        case .moveColumnLeft:
+            seedPresentationFrames(from: previousState)
+            animated = moveActiveColumnHorizontally(by: -1)
+        case .moveColumnRight:
+            seedPresentationFrames(from: previousState)
+            animated = moveActiveColumnHorizontally(by: 1)
+        case .moveColumnToWorkspace(let oneBasedIndex):
+            moveActiveColumnToWorkspace(oneBasedIndex: oneBasedIndex)
+        case .moveColumnToWorkspaceDown:
+            moveActiveColumnToWorkspace(relativeOffset: 1)
+        case .moveColumnToWorkspaceUp:
+            moveActiveColumnToWorkspace(relativeOffset: -1)
         }
 
         let newState = captureLayoutState()
@@ -627,6 +664,71 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         let zeroBased = max(0, oneBasedIndex - 1)
         activeWorkspace = min(zeroBased, workspaces.count - 1)
         activeWorkspaceObject()?.clampFocus()
+    }
+
+    private func moveActiveColumnHorizontally(by delta: Int) -> Bool {
+        guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
+            return false
+        }
+
+        workspace.clampFocus()
+        let sourceIndex = workspace.activeColumn
+        let targetIndex = sourceIndex + delta
+        guard workspace.columns.indices.contains(targetIndex) else {
+            return false
+        }
+
+        let window = workspace.columns.remove(at: sourceIndex)
+        workspace.columns.insert(window, at: targetIndex)
+        workspace.activeColumn = targetIndex
+        workspace.scrollOffset = nil
+        return true
+    }
+
+    @discardableResult
+    private func moveActiveColumnToWorkspace(relativeOffset: Int) -> Bool {
+        let targetIndex = activeWorkspace + relativeOffset
+        return moveActiveColumnToWorkspace(zeroBasedIndex: targetIndex)
+    }
+
+    @discardableResult
+    private func moveActiveColumnToWorkspace(oneBasedIndex: Int) -> Bool {
+        let zeroBased = max(0, oneBasedIndex - 1)
+        return moveActiveColumnToWorkspace(zeroBasedIndex: zeroBased)
+    }
+
+    @discardableResult
+    private func moveActiveColumnToWorkspace(zeroBasedIndex requestedIndex: Int) -> Bool {
+        guard workspaces.indices.contains(activeWorkspace),
+              let sourceWorkspace = activeWorkspaceObject(),
+              !sourceWorkspace.columns.isEmpty
+        else {
+            return false
+        }
+
+        sourceWorkspace.clampFocus()
+        let targetIndex = min(max(requestedIndex, 0), workspaces.count - 1)
+        guard targetIndex != activeWorkspace else {
+            return false
+        }
+
+        let targetWorkspace = workspaces[targetIndex]
+        let movingWindow = sourceWorkspace.columns.remove(at: sourceWorkspace.activeColumn)
+        sourceWorkspace.scrollOffset = nil
+        sourceWorkspace.clampFocus()
+
+        targetWorkspace.clampFocus()
+        let insertionIndex = targetWorkspace.columns.isEmpty
+            ? 0
+            : min(targetWorkspace.activeColumn + 1, targetWorkspace.columns.count)
+        targetWorkspace.columns.insert(movingWindow, at: insertionIndex)
+        targetWorkspace.activeColumn = insertionIndex
+        targetWorkspace.scrollOffset = nil
+
+        activeWorkspace = targetIndex
+        ensureTrailingEmptyWorkspace()
+        activeWorkspace = workspaces.firstIndex(where: { $0 === targetWorkspace }) ?? activeWorkspace
+        return true
     }
 
     private func activeWorkspaceObject() -> Workspace? {
@@ -642,6 +744,12 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             activeColumns: workspaces.map(\.activeColumn),
             scrollOffsets: workspaces.map(\.scrollOffset)
         )
+    }
+
+    private func seedPresentationFrames(from state: LayoutState) {
+        let viewport = currentViewport()
+        let layout = layoutItems(viewport: viewport, state: state, parkHidden: false)
+        presentationFrames = Dictionary(uniqueKeysWithValues: layout.map { (ObjectIdentifier($0.window), $0.frame) })
     }
 
     @objc private func applicationActivated(_ notification: Notification) {
