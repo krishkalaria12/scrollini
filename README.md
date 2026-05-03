@@ -10,6 +10,8 @@ normal app windows into a virtual grid:
   the screen width, so the next column can peek in while you scroll sideways.
 - App rules can override column width ratios. A `1.0` ratio occupies the whole
   screen width; larger ratios are allowed and grow beyond the screen.
+- `preset_width_ratios` can define quick active-column width presets. Preset
+  and nudge actions write the active window's session-only manual width ratio.
 - App rules can also mark windows as `ignore` or `float`. Ignored windows are
   left alone. Floating windows are kept visible but are not tiled, resized,
   centered, parked, hidden, or moved between workspaces.
@@ -42,6 +44,14 @@ normal app windows into a virtual grid:
 - `Cmd+Shift+K`: move active column to workspace up.
 - `Cmd+Shift+H`: move active column left.
 - `Cmd+Shift+L`: move active column right.
+- `Cmd+Ctrl+H`: cycle active column to previous width preset.
+- `Cmd+Ctrl+L`: cycle active column to next width preset.
+- `Cmd+Ctrl+-`: nudge active column width down by `0.1`.
+- `Cmd+Ctrl+=`: nudge active column width up by `0.1`.
+- `Cmd+Ctrl+Shift+H`: cycle every tiled window to the previous width preset.
+- `Cmd+Ctrl+Shift+L`: cycle every tiled window to the next width preset.
+- `Cmd+Ctrl+Shift+-`: nudge every tiled window width down by `0.1`.
+- `Cmd+Ctrl+Shift+=`: nudge every tiled window width up by `0.1`.
 
 Everything else passes through. In particular, `Cmd+Tab` remains macOS app
 switching; after macOS focuses a managed window, scrollini adopts that window's
@@ -69,6 +79,7 @@ The repo includes this default:
 ```json
 {
   "default_width_ratio": 0.8,
+  "preset_width_ratios": [0.5, 0.67, 0.8, 1.0],
   "animation_duration_ms": 180,
   "hover_to_focus": true,
   "hover_focus_delay_ms": 120,

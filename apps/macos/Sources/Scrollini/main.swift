@@ -18,6 +18,8 @@ private enum KeyCode {
     static let j: Int64 = 38
     static let k: Int64 = 40
     static let l: Int64 = 37
+    static let equal: Int64 = 24
+    static let minus: Int64 = 27
 }
 
 private enum Command {
@@ -31,6 +33,14 @@ private enum Command {
     case moveColumnToWorkspace(Int)
     case moveColumnToWorkspaceDown
     case moveColumnToWorkspaceUp
+    case cycleWidthPresetBackward
+    case cycleWidthPresetForward
+    case nudgeWidthNarrower
+    case nudgeWidthWider
+    case cycleAllWidthPresetsBackward
+    case cycleAllWidthPresetsForward
+    case nudgeAllWidthsNarrower
+    case nudgeAllWidthsWider
 }
 
 private final class ManagedWindow {
@@ -60,6 +70,7 @@ private enum WindowBehavior: String, Codable {
 
 private struct ScrolliniConfig: Codable {
     var defaultWidthRatio: CGFloat
+    var presetWidthRatios: [CGFloat]?
     var animationDurationMS: Int?
     var hoverToFocus: Bool?
     var hoverFocusDelayMS: Int?
@@ -67,6 +78,7 @@ private struct ScrolliniConfig: Codable {
 
     static let fallback = ScrolliniConfig(
         defaultWidthRatio: 0.8,
+        presetWidthRatios: [0.5, 0.67, 0.8, 1.0],
         animationDurationMS: 180,
         hoverToFocus: true,
         hoverFocusDelayMS: 120,
@@ -90,6 +102,7 @@ private struct ScrolliniConfig: Codable {
             do {
                 var config = try decoder.decode(ScrolliniConfig.self, from: data)
                 config.defaultWidthRatio = config.defaultWidthRatio.clampedWidthRatio
+                config.presetWidthRatios = normalizeWidthPresets(config.presetWidthRatios)
                 config.animationDurationMS = config.animationDurationMS.map { min(max($0, 0), 500) }
                 config.hoverFocusDelayMS = config.hoverFocusDelayMS.map { min(max($0, 0), 1000) }
                 config.rules = config.rules.map { rule in
@@ -105,6 +118,22 @@ private struct ScrolliniConfig: Codable {
         }
 
         return .fallback
+    }
+
+    private static func normalizeWidthPresets(_ presets: [CGFloat]?) -> [CGFloat]? {
+        guard let presets else {
+            return nil
+        }
+
+        let sorted = presets
+            .filter(\.isFinite)
+            .map(\.clampedManualWidthRatio)
+            .sorted()
+        var unique: [CGFloat] = []
+        for preset in sorted where unique.last.map({ abs($0 - preset) >= 0.005 }) ?? true {
+            unique.append(preset)
+        }
+        return unique.isEmpty ? nil : unique
     }
 
     private static func configCandidates() -> [URL] {
@@ -126,6 +155,7 @@ private struct ScrolliniConfig: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case defaultWidthRatio = "default_width_ratio"
+        case presetWidthRatios = "preset_width_ratios"
         case animationDurationMS = "animation_duration_ms"
         case hoverToFocus = "hover_to_focus"
         case hoverFocusDelayMS = "hover_focus_delay_ms"
@@ -442,6 +472,8 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         print("scrollini: running")
         print("scrollini: Cmd+1..9 focus workspace, Cmd+J/K workspace down/up, Cmd+H/L column left/right")
         print("scrollini: Cmd+Shift+1..9 move column to workspace, Cmd+Shift+J/K move column down/up, Cmd+Shift+H/L move column left/right")
+        print("scrollini: Cmd+Ctrl+H/L cycle width presets, Cmd+Ctrl+-/= nudge width by 0.1")
+        print("scrollini: Cmd+Ctrl+Shift+H/L cycle width presets for all windows, Cmd+Ctrl+Shift+-/= nudge all widths")
         print("scrollini: Cmd-Tab is passed through and adopted after macOS focuses a window")
         if !SkyLight.shared.canSetAlpha {
             print("scrollini: SkyLight alpha support unavailable; parked windows will remain as edge slivers")
@@ -545,7 +577,11 @@ private final class Scrollini: NSObject, @unchecked Sendable {
 
     fileprivate func handleKeyEvent(_ event: CGEvent) -> Bool {
         let modifiers = event.flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate])
-        guard modifiers == .maskCommand || modifiers == [.maskCommand, .maskShift] else {
+        guard modifiers == .maskCommand
+            || modifiers == [.maskCommand, .maskShift]
+            || modifiers == [.maskCommand, .maskControl]
+            || modifiers == [.maskCommand, .maskControl, .maskShift]
+        else {
             return false
         }
 
@@ -568,7 +604,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             case KeyCode.l: command = .columnRight
             default: command = nil
             }
-        } else {
+        } else if modifiers == [.maskCommand, .maskShift] {
             switch keyCode {
             case KeyCode.one: command = .moveColumnToWorkspace(1)
             case KeyCode.two: command = .moveColumnToWorkspace(2)
@@ -583,6 +619,22 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             case KeyCode.j: command = .moveColumnToWorkspaceDown
             case KeyCode.k: command = .moveColumnToWorkspaceUp
             case KeyCode.l: command = .moveColumnRight
+            default: command = nil
+            }
+        } else if modifiers == [.maskCommand, .maskControl] {
+            switch keyCode {
+            case KeyCode.h: command = .cycleWidthPresetBackward
+            case KeyCode.l: command = .cycleWidthPresetForward
+            case KeyCode.minus: command = .nudgeWidthNarrower
+            case KeyCode.equal: command = .nudgeWidthWider
+            default: command = nil
+            }
+        } else {
+            switch keyCode {
+            case KeyCode.h: command = .cycleAllWidthPresetsBackward
+            case KeyCode.l: command = .cycleAllWidthPresetsForward
+            case KeyCode.minus: command = .nudgeAllWidthsNarrower
+            case KeyCode.equal: command = .nudgeAllWidthsWider
             default: command = nil
             }
         }
@@ -654,6 +706,38 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             moveActiveColumnToWorkspace(relativeOffset: 1)
         case .moveColumnToWorkspaceUp:
             moveActiveColumnToWorkspace(relativeOffset: -1)
+        case .cycleWidthPresetBackward:
+            guard cycleActiveWidthPreset(direction: -1) else {
+                return
+            }
+        case .cycleWidthPresetForward:
+            guard cycleActiveWidthPreset(direction: 1) else {
+                return
+            }
+        case .nudgeWidthNarrower:
+            guard nudgeActiveWidth(by: -0.1) else {
+                return
+            }
+        case .nudgeWidthWider:
+            guard nudgeActiveWidth(by: 0.1) else {
+                return
+            }
+        case .cycleAllWidthPresetsBackward:
+            guard cycleAllWidthPresets(direction: -1) else {
+                return
+            }
+        case .cycleAllWidthPresetsForward:
+            guard cycleAllWidthPresets(direction: 1) else {
+                return
+            }
+        case .nudgeAllWidthsNarrower:
+            guard nudgeAllWidths(by: -0.1) else {
+                return
+            }
+        case .nudgeAllWidthsWider:
+            guard nudgeAllWidths(by: 0.1) else {
+                return
+            }
         }
 
         let newState = captureLayoutState()
@@ -682,6 +766,111 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         workspace.columns.insert(window, at: targetIndex)
         workspace.activeColumn = targetIndex
         workspace.scrollOffset = nil
+        return true
+    }
+
+    private func cycleActiveWidthPreset(direction: Int) -> Bool {
+        guard let window = activeWindow() else {
+            return false
+        }
+
+        guard let target = widthPreset(after: widthRatio(for: window), direction: direction) else {
+            return false
+        }
+
+        return setActiveWindowWidthRatio(target)
+    }
+
+    private func cycleAllWidthPresets(direction: Int) -> Bool {
+        guard let window = activeWindow(),
+              let target = widthPreset(after: widthRatio(for: window), direction: direction)
+        else {
+            return false
+        }
+
+        return setAllWindowWidthRatios(target)
+    }
+
+    private func widthPreset(after current: CGFloat, direction: Int) -> CGFloat? {
+        let presets = widthPresetRatios
+        guard !presets.isEmpty else {
+            return nil
+        }
+
+        if direction >= 0 {
+            return presets.first(where: { $0 > current + 0.005 }) ?? presets[0]
+        }
+
+        return presets.last(where: { $0 < current - 0.005 }) ?? presets[presets.count - 1]
+    }
+
+    private func nudgeActiveWidth(by delta: CGFloat) -> Bool {
+        guard let window = activeWindow() else {
+            return false
+        }
+        return setActiveWindowWidthRatio(widthRatio(for: window) + delta)
+    }
+
+    private func nudgeAllWidths(by delta: CGFloat) -> Bool {
+        var changed = false
+        for window in tiledWindows() {
+            changed = setWidthRatio(widthRatio(for: window) + delta, for: window) || changed
+        }
+
+        guard changed else {
+            return false
+        }
+
+        for workspace in workspaces {
+            workspace.scrollOffset = nil
+        }
+        presentationFrames.removeAll()
+        return true
+    }
+
+    private func setActiveWindowWidthRatio(_ ratio: CGFloat) -> Bool {
+        guard let workspace = activeWorkspaceObject(),
+              !workspace.columns.isEmpty
+        else {
+            return false
+        }
+
+        workspace.clampFocus()
+        let window = workspace.columns[workspace.activeColumn]
+        guard setWidthRatio(ratio, for: window) else {
+            return false
+        }
+
+        workspace.scrollOffset = nil
+        presentationFrames.removeAll()
+        return true
+    }
+
+    private func setAllWindowWidthRatios(_ ratio: CGFloat) -> Bool {
+        var changed = false
+        for window in tiledWindows() {
+            changed = setWidthRatio(ratio, for: window) || changed
+        }
+
+        guard changed else {
+            return false
+        }
+
+        for workspace in workspaces {
+            workspace.scrollOffset = nil
+        }
+        presentationFrames.removeAll()
+        return true
+    }
+
+    private func setWidthRatio(_ ratio: CGFloat, for window: ManagedWindow) -> Bool {
+        let oldRatio = widthRatio(for: window)
+        let newRatio = ratio.clampedManualWidthRatio
+        guard abs(oldRatio - newRatio) >= 0.005 else {
+            return false
+        }
+
+        window.manualWidthRatio = newRatio
         return true
     }
 
@@ -993,6 +1182,10 @@ private final class Scrollini: NSObject, @unchecked Sendable {
 
     private var hoverFocusDelay: TimeInterval {
         TimeInterval(config.hoverFocusDelayMS ?? ScrolliniConfig.fallback.hoverFocusDelayMS ?? 120) / 1000
+    }
+
+    private var widthPresetRatios: [CGFloat] {
+        config.presetWidthRatios ?? ScrolliniConfig.fallback.presetWidthRatios ?? [0.5, 0.67, 0.8, 1.0]
     }
 
     private func projectLayout(
