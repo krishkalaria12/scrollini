@@ -87,25 +87,54 @@ scrollini loads the first config file it can read:
 - `$XDG_CONFIG_HOME/scrollini/config.json`
 - `~/.config/scrollini/config.json`
 
-The repo includes this default:
+The repo includes a full default config. A compact version looks like this:
 
 ```json
 {
   "default_width_ratio": 0.8,
   "preset_width_ratios": [0.5, 0.67, 0.8, 1.0],
   "animation_duration_ms": 240,
+  "keyboard_animation_ms": 240,
+  "hover_focus_animation_ms": 240,
+  "trackpad_settle_animation_ms": 240,
+  "move_column_animation_ms": 240,
+  "animation_curve": "smooth",
   "hover_to_focus": true,
   "hover_focus_delay_ms": 120,
   "hover_focus_max_scroll_ratio": 0.15,
+  "hover_focus_requires_visible_ratio": 0.15,
+  "hover_focus_edge_trigger_width": 8,
+  "hover_focus_after_trackpad_ms": 280,
+  "hover_focus_mode": "edge_or_visible",
   "workspace_auto_back_and_forth": true,
   "center_focused_column": true,
+  "focus_alignment": "smart",
+  "new_window_position": "after_active",
+  "inner_gap": 0,
+  "outer_gap": 0,
+  "parked_sliver_width": 1,
   "excluded_keybindings": ["cmd+shift+5"],
+  "keybindings": {
+    "column_left": ["cmd+h"],
+    "column_right": ["cmd+l"],
+    "workspace_down": ["cmd+j"],
+    "workspace_up": ["cmd+k"]
+  },
   "trackpad_navigation": true,
   "trackpad_navigation_fingers": 3,
   "trackpad_navigation_sensitivity": 1.6,
   "trackpad_navigation_deceleration": 5.5,
+  "trackpad_navigation_hover_suppression_ms": 280,
+  "trackpad_navigation_momentum_min_velocity": 80,
+  "trackpad_navigation_velocity_gain": 1.35,
+  "trackpad_navigation_settle_animation_ms": 240,
+  "trackpad_navigation_snap": "nearest_column",
   "trackpad_navigation_invert_x": false,
   "trackpad_navigation_invert_y": false,
+  "rescan_interval_ms": 1000,
+  "restore_on_exit": true,
+  "hide_method": "skylight_alpha",
+  "debug_logging": false,
   "rules": [
     {
       "bundle_id": "com.apple.finder",
@@ -115,10 +144,27 @@ The repo includes this default:
 }
 ```
 
+`keybindings` is merged with the built-in defaults by action name, so a config
+can override only the actions it cares about. Set an action to `[]` to disable
+it. `excluded_keybindings` always wins, which is why the default `Cmd+Shift+5`
+screen-recording shortcut passes through even though workspace 5 has a move
+binding. See `scrollini.config.json` for the full command-name list.
+
+Useful string settings:
+
+- `animation_curve`: `smooth`, `snappy`, or `linear`
+- `hover_focus_mode`: `off`, `visible_only`, or `edge_or_visible`
+- `focus_alignment`: `left`, `center`, or `smart`
+- `new_window_position` and rule `open_position`: `before_active`,
+  `after_active`, or `end`
+- `trackpad_navigation_snap`: `nearest_column`, `nearest_visible`, or `none`
+- `hide_method`: `skylight_alpha` or `park_only`
+
 Rules can match on `bundle_id`, `app_name`, or `title_contains`. Use
 `behavior: "ignore"` for windows scrollini should leave alone, `behavior: "float"`
 for visible untiled windows, and `width_ratio` to override an app's default
-column width.
+column width. Rules can also set `workspace`, `open_position`,
+`trackpad_navigation`, and `hover_to_focus` for matching windows.
 
 ## Development
 

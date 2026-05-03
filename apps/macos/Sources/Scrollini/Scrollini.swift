@@ -13,6 +13,8 @@ final class Scrollini: NSObject, @unchecked Sendable {
     private var observers: [pid_t: AXObserver] = [:]
     private var eventTap: CFMachPort?
     private var eventTapSource: CFRunLoopSource?
+    private var commandByKeybinding: [String: Command] = [:]
+    private var excludedKeybindingSet = Set<String>()
     private var rescanTimer: Timer?
     private var isApplyingLayout = false
     private var animationTimer: DispatchSourceTimer?
@@ -31,9 +33,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
     private var manualResizeEndTimer: DispatchSourceTimer?
     private var manualResizeElement: AXUIElement?
     private var presentationFrames: [ObjectIdentifier: CGRect] = [:]
-    private let parkedSliverWidth: CGFloat = 1
     private var signalSources: [DispatchSourceSignal] = []
-    private let hoverFocusEdgeTriggerWidth: CGFloat = 8
     private let restoreStateURL = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("scrollini-\(ProcessInfo.processInfo.processIdentifier).restore.json")
     private var cleanupWatcher: Process?
@@ -46,21 +46,19 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
         observeWorkspace()
         installTerminationHandlers()
-        startCleanupWatcher()
+        if restoreOnExit {
+            startCleanupWatcher()
+        }
+        configureInput()
         installEventTap()
         installTrackpadNavigation()
         rescanWindows(adoptFocused: true)
-        rescanTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        rescanTimer = Timer.scheduledTimer(withTimeInterval: rescanInterval, repeats: true) { [weak self] _ in
             self?.rescanWindows(adoptFocused: false)
         }
 
         print("scrollini: running")
-        print("scrollini: Cmd+1..9 focus workspace, Cmd+0 previous workspace, Cmd+J/K workspace down/up, Cmd+H/L column left/right")
-        print("scrollini: Cmd+[/] or Cmd+Home/End focus first/last column")
-        print("scrollini: Cmd+Shift+1..9 move column to workspace, Cmd+Shift+J/K move column down/up, Cmd+Shift+H/L move column left/right")
-        print("scrollini: Cmd+Shift+[/] or Cmd+Shift+Home/End move column to first/last")
-        print("scrollini: Cmd+Ctrl+H/L cycle width presets, Cmd+Ctrl+-/= nudge width by 0.1")
-        print("scrollini: Cmd+Ctrl+Shift+H/L cycle width presets for all windows, Cmd+Ctrl+Shift+-/= nudge all widths")
+        print("scrollini: loaded \(commandByKeybinding.count) keybindings")
         if trackpadNavigationEnabled {
             if trackpadNavigation != nil {
                 print("scrollini: three-finger trackpad swipe navigates columns/workspaces")
@@ -69,7 +67,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
             }
         }
         print("scrollini: Cmd-Tab is passed through and adopted after macOS focuses a window")
-        if !SkyLight.shared.canSetAlpha {
+        if hideMethod == .skyLightAlpha && !SkyLight.shared.canSetAlpha {
             print("scrollini: SkyLight alpha support unavailable; parked windows will remain as edge slivers")
         }
         RunLoop.main.run()
@@ -107,7 +105,9 @@ final class Scrollini: NSObject, @unchecked Sendable {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler { [weak self] in
-                self?.restoreManagedWindowsForExit()
+                if self?.restoreOnExit == true {
+                    self?.restoreManagedWindowsForExit()
+                }
                 exit(0)
             }
             source.resume()
@@ -189,15 +189,14 @@ final class Scrollini: NSObject, @unchecked Sendable {
         trackpadNavigation = navigation
     }
 
+    private func configureInput() {
+        commandByKeybinding = makeCommandByKeybinding()
+        excludedKeybindingSet = Set((config.excludedKeybindings ?? ScrolliniConfig.fallback.excludedKeybindings ?? [])
+            .compactMap(normalizedKeybinding(_:)))
+    }
+
     fileprivate func handleKeyEvent(_ event: CGEvent) -> Bool {
         let modifiers = event.flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate])
-        guard modifiers == .maskCommand
-            || modifiers == [.maskCommand, .maskShift]
-            || modifiers == [.maskCommand, .maskControl]
-            || modifiers == [.maskCommand, .maskControl, .maskShift]
-        else {
-            return false
-        }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         let keyText = keyboardText(from: event)
@@ -205,69 +204,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
             return false
         }
 
-        let command: Command?
-        if modifiers == .maskCommand {
-            switch keyCode {
-            case KeyCode.one: command = .focusWorkspace(1)
-            case KeyCode.two: command = .focusWorkspace(2)
-            case KeyCode.three: command = .focusWorkspace(3)
-            case KeyCode.four: command = .focusWorkspace(4)
-            case KeyCode.five: command = .focusWorkspace(5)
-            case KeyCode.six: command = .focusWorkspace(6)
-            case KeyCode.seven: command = .focusWorkspace(7)
-            case KeyCode.eight: command = .focusWorkspace(8)
-            case KeyCode.nine: command = .focusWorkspace(9)
-            case KeyCode.zero: command = .focusPreviousWorkspace
-            case KeyCode.h: command = .columnLeft
-            case KeyCode.j: command = .workspaceDown
-            case KeyCode.k: command = .workspaceUp
-            case KeyCode.l: command = .columnRight
-            case KeyCode.leftBracket, KeyCode.home: command = .columnFirst
-            case KeyCode.rightBracket, KeyCode.end: command = .columnLast
-            case _ where keyText == "{" || keyText == "[": command = .columnFirst
-            case _ where keyText == "}" || keyText == "]": command = .columnLast
-            default: command = nil
-            }
-        } else if modifiers == [.maskCommand, .maskShift] {
-            switch keyCode {
-            case KeyCode.one: command = .moveColumnToWorkspace(1)
-            case KeyCode.two: command = .moveColumnToWorkspace(2)
-            case KeyCode.three: command = .moveColumnToWorkspace(3)
-            case KeyCode.four: command = .moveColumnToWorkspace(4)
-            case KeyCode.five: command = .moveColumnToWorkspace(5)
-            case KeyCode.six: command = .moveColumnToWorkspace(6)
-            case KeyCode.seven: command = .moveColumnToWorkspace(7)
-            case KeyCode.eight: command = .moveColumnToWorkspace(8)
-            case KeyCode.nine: command = .moveColumnToWorkspace(9)
-            case KeyCode.h: command = .moveColumnLeft
-            case KeyCode.j: command = .moveColumnToWorkspaceDown
-            case KeyCode.k: command = .moveColumnToWorkspaceUp
-            case KeyCode.l: command = .moveColumnRight
-            case KeyCode.leftBracket, KeyCode.home: command = .moveColumnToFirst
-            case KeyCode.rightBracket, KeyCode.end: command = .moveColumnToLast
-            case _ where keyText == "{" || keyText == "[": command = .moveColumnToFirst
-            case _ where keyText == "}" || keyText == "]": command = .moveColumnToLast
-            default: command = nil
-            }
-        } else if modifiers == [.maskCommand, .maskControl] {
-            switch keyCode {
-            case KeyCode.h: command = .cycleWidthPresetBackward
-            case KeyCode.l: command = .cycleWidthPresetForward
-            case KeyCode.minus: command = .nudgeWidthNarrower
-            case KeyCode.equal: command = .nudgeWidthWider
-            default: command = nil
-            }
-        } else {
-            switch keyCode {
-            case KeyCode.h: command = .cycleAllWidthPresetsBackward
-            case KeyCode.l: command = .cycleAllWidthPresetsForward
-            case KeyCode.minus: command = .nudgeAllWidthsNarrower
-            case KeyCode.equal: command = .nudgeAllWidthsWider
-            default: command = nil
-            }
-        }
-
-        guard let command else {
+        guard let command = commandForKeyEvent(modifiers: modifiers, keyCode: keyCode, keyText: keyText) else {
             return false
         }
 
@@ -275,6 +212,110 @@ final class Scrollini: NSObject, @unchecked Sendable {
             self?.perform(command)
         }
         return true
+    }
+
+    private func makeCommandByKeybinding() -> [String: Command] {
+        var configured = ScrolliniConfig.defaultKeybindings
+        for (name, bindings) in config.keybindings ?? [:] {
+            configured[name] = bindings
+        }
+
+        var commands: [String: Command] = [:]
+        for name in configured.keys.sorted() {
+            let bindings = configured[name] ?? []
+            guard let command = command(named: name) else {
+                fputs("scrollini: ignoring unknown keybinding command '\(name)'\n", stderr)
+                continue
+            }
+
+            for binding in bindings {
+                guard let normalized = normalizedKeybinding(binding) else {
+                    fputs("scrollini: ignoring invalid keybinding '\(binding)' for '\(name)'\n", stderr)
+                    continue
+                }
+                if commands[normalized] != nil {
+                    fputs("scrollini: keybinding '\(binding)' is assigned more than once; using '\(name)'\n", stderr)
+                }
+                commands[normalized] = command
+            }
+        }
+
+        return commands
+    }
+
+    private func commandForKeyEvent(modifiers: CGEventFlags, keyCode: Int64, keyText: String) -> Command? {
+        for candidate in normalizedKeybindingCandidates(modifiers: modifiers, keyCode: keyCode, keyText: keyText) {
+            if let command = commandByKeybinding[candidate] {
+                return command
+            }
+        }
+        return nil
+    }
+
+    private func command(named name: String) -> Command? {
+        if let index = commandIndex(name, prefix: "focus_workspace_") {
+            return .focusWorkspace(index)
+        }
+        if let index = commandIndex(name, prefix: "move_column_to_workspace_") {
+            return .moveColumnToWorkspace(index)
+        }
+
+        switch name {
+        case "focus_previous_workspace":
+            return .focusPreviousWorkspace
+        case "workspace_down":
+            return .workspaceDown
+        case "workspace_up":
+            return .workspaceUp
+        case "column_left":
+            return .columnLeft
+        case "column_right":
+            return .columnRight
+        case "column_first":
+            return .columnFirst
+        case "column_last":
+            return .columnLast
+        case "move_column_left":
+            return .moveColumnLeft
+        case "move_column_right":
+            return .moveColumnRight
+        case "move_column_to_first":
+            return .moveColumnToFirst
+        case "move_column_to_last":
+            return .moveColumnToLast
+        case "move_column_down":
+            return .moveColumnToWorkspaceDown
+        case "move_column_up":
+            return .moveColumnToWorkspaceUp
+        case "cycle_width_preset_backward":
+            return .cycleWidthPresetBackward
+        case "cycle_width_preset_forward":
+            return .cycleWidthPresetForward
+        case "nudge_width_narrower":
+            return .nudgeWidthNarrower
+        case "nudge_width_wider":
+            return .nudgeWidthWider
+        case "cycle_all_width_presets_backward":
+            return .cycleAllWidthPresetsBackward
+        case "cycle_all_width_presets_forward":
+            return .cycleAllWidthPresetsForward
+        case "nudge_all_widths_narrower":
+            return .nudgeAllWidthsNarrower
+        case "nudge_all_widths_wider":
+            return .nudgeAllWidthsWider
+        default:
+            return nil
+        }
+    }
+
+    private func commandIndex(_ name: String, prefix: String) -> Int? {
+        guard name.hasPrefix(prefix),
+              let index = Int(name.dropFirst(prefix.count)),
+              (1...9).contains(index)
+        else {
+            return nil
+        }
+        return index
     }
 
     private func keyboardText(from event: CGEvent) -> String {
@@ -290,21 +331,24 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func isExcludedKeybinding(modifiers: CGEventFlags, keyCode: Int64, keyText: String) -> Bool {
-        let excluded = Set((config.excludedKeybindings ?? ScrolliniConfig.fallback.excludedKeybindings ?? [])
-            .compactMap(normalizedKeybinding(_:)))
-        guard !excluded.isEmpty else {
+        guard !excludedKeybindingSet.isEmpty else {
             return false
         }
 
-        let modifierParts = normalizedModifierParts(from: modifiers)
-        for keyName in normalizedKeyNames(keyCode: keyCode, keyText: keyText) {
-            let candidate = (modifierParts + [keyName]).joined(separator: "+")
-            if excluded.contains(candidate) {
+        for candidate in normalizedKeybindingCandidates(modifiers: modifiers, keyCode: keyCode, keyText: keyText) {
+            if excludedKeybindingSet.contains(candidate) {
                 return true
             }
         }
 
         return false
+    }
+
+    private func normalizedKeybindingCandidates(modifiers: CGEventFlags, keyCode: Int64, keyText: String) -> [String] {
+        let modifierParts = normalizedModifierParts(from: modifiers)
+        return normalizedKeyNames(keyCode: keyCode, keyText: keyText).map { keyName in
+            (modifierParts + [keyName]).joined(separator: "+")
+        }
     }
 
     private func normalizedKeybinding(_ binding: String) -> String? {
@@ -409,7 +453,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func normalizedKeyName(_ key: String) -> String {
-        switch key {
+        switch key.lowercased() {
         case "leftbracket", "left-bracket", "openbracket", "open-bracket":
             return "["
         case "rightbracket", "right-bracket", "closebracket", "close-bracket":
@@ -461,7 +505,9 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func handleTrackpadNavigationEvent(_ event: TrackpadNavigationEvent) {
-        guard trackpadNavigationEnabled else {
+        guard trackpadNavigationEnabled,
+              trackpadNavigationAllowedForActiveWindow
+        else {
             return
         }
 
@@ -520,7 +566,9 @@ final class Scrollini: NSObject, @unchecked Sendable {
         if abs(trackpadCameraVelocity.y) < abs(trackpadLatestCameraVelocity.y) {
             trackpadCameraVelocity.y = trackpadLatestCameraVelocity.y
         }
-        guard abs(trackpadCameraVelocity.x) >= 80 || abs(trackpadCameraVelocity.y) >= 80 else {
+        guard abs(trackpadCameraVelocity.x) >= trackpadNavigationMomentumMinVelocity
+            || abs(trackpadCameraVelocity.y) >= trackpadNavigationMomentumMinVelocity
+        else {
             settleTrackpadCamera(focusActiveWindow: true)
             return
         }
@@ -546,12 +594,12 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
     private func trackpadCameraVelocityGain(for velocity: CGPoint) -> CGFloat {
         let speed = hypot(velocity.x, velocity.y)
-        let extra = min(max((speed - 0.35) / 1.4, 0), 1.35)
+        let extra = min(max((speed - 0.35) / 1.4, 0), trackpadNavigationVelocityGain)
         return 1 + extra
     }
 
     private func suppressHoverFocusAfterTrackpadMovement() {
-        hoverFocusSuppressedUntil = CFAbsoluteTimeGetCurrent() + 0.28
+        hoverFocusSuppressedUntil = CFAbsoluteTimeGetCurrent() + hoverFocusAfterTrackpad
         cancelHoverFocus()
     }
 
@@ -641,7 +689,9 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
         projectLayout(focusActiveWindow: false, layoutLockDelay: 0)
 
-        if abs(trackpadCameraVelocity.x) < 80, abs(trackpadCameraVelocity.y) < 80 {
+        if abs(trackpadCameraVelocity.x) < trackpadNavigationMomentumMinVelocity,
+           abs(trackpadCameraVelocity.y) < trackpadNavigationMomentumMinVelocity
+        {
             stopTrackpadMomentum()
             settleTrackpadCamera(focusActiveWindow: true)
         }
@@ -693,11 +743,22 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
         if let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty {
             let offset = horizontalCameraOffset(for: workspace, viewport: viewport)
-            workspace.activeColumn = closestColumn(to: offset, in: workspace, viewport: viewport)
-            workspace.scrollOffset = nil
+            switch trackpadNavigationSnap {
+            case .nearestColumn:
+                workspace.activeColumn = closestColumn(to: offset, in: workspace, viewport: viewport)
+                workspace.scrollOffset = nil
+            case .nearestVisible:
+                workspace.activeColumn = mostVisibleColumn(in: workspace, viewport: viewport, scrollOffset: offset)
+                workspace.scrollOffset = offset
+            case .none:
+                workspace.activeColumn = mostVisibleColumn(in: workspace, viewport: viewport, scrollOffset: offset)
+                workspace.scrollOffset = offset
+            }
         }
 
-        trackpadCameraY = nil
+        if trackpadNavigationSnap != .none {
+            trackpadCameraY = nil
+        }
         trackpadCameraVelocity = .zero
         trackpadLatestCameraVelocity = .zero
         trackpadPendingCameraDelta = .zero
@@ -709,6 +770,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
             focusActiveWindow: focusActiveWindow,
             animated: previousState != targetState,
             from: previousState,
+            animationDuration: trackpadSettleAnimationDuration,
             layoutLockDelay: 0.04
         )
     }
@@ -744,6 +806,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
         rescanWindows(adoptFocused: false)
         let previousState = captureLayoutState()
         var animated = false
+        var duration = keyboardAnimationDuration
 
         switch command {
         case .focusWorkspace(let oneBasedIndex):
@@ -792,15 +855,19 @@ final class Scrollini: NSObject, @unchecked Sendable {
             }
             animated = true
         case .moveColumnLeft:
+            duration = moveColumnAnimationDuration
             seedPresentationFrames(from: previousState)
             animated = moveActiveColumnHorizontally(by: -1)
         case .moveColumnRight:
+            duration = moveColumnAnimationDuration
             seedPresentationFrames(from: previousState)
             animated = moveActiveColumnHorizontally(by: 1)
         case .moveColumnToFirst:
+            duration = moveColumnAnimationDuration
             seedPresentationFrames(from: previousState)
             animated = moveActiveColumn(to: 0)
         case .moveColumnToLast:
+            duration = moveColumnAnimationDuration
             seedPresentationFrames(from: previousState)
             guard let workspace = activeWorkspaceObject() else {
                 return
@@ -847,7 +914,12 @@ final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         let newState = captureLayoutState()
-        projectLayout(focusActiveWindow: true, animated: animated && previousState != newState, from: previousState)
+        projectLayout(
+            focusActiveWindow: true,
+            animated: animated && previousState != newState,
+            from: previousState,
+            animationDuration: duration
+        )
     }
 
     private func focusWorkspace(_ oneBasedIndex: Int) {
@@ -1155,7 +1227,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
         for window in allWindows() {
             if !discovered.contains(where: { sameWindow($0.element, window.element) }) {
                 if behavior(for: window) == .ignore {
-                    SkyLight.shared.setAlpha(1, for: window.windowID)
+                    setWindowAlpha(1, for: window.windowID)
                 }
                 removeWindow(window)
                 changed = true
@@ -1233,7 +1305,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
                     title: title
                 )
                 guard behavior(for: window) != .ignore else {
-                    SkyLight.shared.setAlpha(1, for: window.windowID)
+                    setWindowAlpha(1, for: window.windowID)
                     continue
                 }
                 windows.append(window)
@@ -1273,15 +1345,10 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func insertNewWindow(_ window: ManagedWindow) {
-        let workspace = activeWorkspaceObject() ?? workspaces[0]
+        let workspace = targetWorkspace(for: window)
         workspace.clampFocus()
 
-        let insertionIndex: Int
-        if workspace.columns.isEmpty {
-            insertionIndex = 0
-        } else {
-            insertionIndex = min(workspace.activeColumn + 1, workspace.columns.count)
-        }
+        let insertionIndex = newWindowInsertionIndex(in: workspace, for: window)
 
         workspace.columns.insert(window, at: insertionIndex)
         workspace.activeColumn = insertionIndex
@@ -1291,6 +1358,37 @@ final class Scrollini: NSObject, @unchecked Sendable {
         }
         ensureTrailingEmptyWorkspace()
         projectLayout(focusActiveWindow: true)
+    }
+
+    private func targetWorkspace(for window: ManagedWindow) -> Workspace {
+        if let oneBased = rule(for: window)?.workspace {
+            let index = max(0, oneBased - 1)
+            ensureWorkspaceExists(index)
+            return workspaces[index]
+        }
+
+        return activeWorkspaceObject() ?? workspaces[0]
+    }
+
+    private func ensureWorkspaceExists(_ index: Int) {
+        while workspaces.count <= index {
+            workspaces.append(Workspace())
+        }
+    }
+
+    private func newWindowInsertionIndex(in workspace: Workspace, for window: ManagedWindow) -> Int {
+        guard !workspace.columns.isEmpty else {
+            return 0
+        }
+
+        switch rule(for: window)?.openPosition ?? newWindowPosition {
+        case .beforeActive:
+            return min(max(workspace.activeColumn, 0), workspace.columns.count)
+        case .afterActive:
+            return min(max(workspace.activeColumn + 1, 0), workspace.columns.count)
+        case .end:
+            return workspace.columns.count
+        }
     }
 
     private func insertFloatingWindow(_ window: ManagedWindow) {
@@ -1358,8 +1456,43 @@ final class Scrollini: NSObject, @unchecked Sendable {
         TimeInterval(config.animationDurationMS ?? ScrolliniConfig.fallback.animationDurationMS ?? 240) / 1000
     }
 
+    private var keyboardAnimationDuration: TimeInterval {
+        let fallback = config.animationDurationMS ?? ScrolliniConfig.fallback.animationDurationMS ?? 240
+        return TimeInterval(config.keyboardAnimationMS ?? fallback) / 1000
+    }
+
+    private var hoverFocusAnimationDuration: TimeInterval {
+        let fallback = config.animationDurationMS ?? ScrolliniConfig.fallback.animationDurationMS ?? 240
+        return TimeInterval(config.hoverFocusAnimationMS ?? fallback) / 1000
+    }
+
+    private var trackpadSettleAnimationDuration: TimeInterval {
+        let milliseconds: Int
+        if let navigationSpecific = config.trackpadNavigationSettleAnimationMS,
+           navigationSpecific != (ScrolliniConfig.fallback.trackpadNavigationSettleAnimationMS ?? 240)
+        {
+            milliseconds = navigationSpecific
+        } else {
+            milliseconds = config.trackpadSettleAnimationMS
+                ?? config.trackpadNavigationSettleAnimationMS
+                ?? config.animationDurationMS
+                ?? ScrolliniConfig.fallback.trackpadSettleAnimationMS
+                ?? 240
+        }
+        return TimeInterval(milliseconds) / 1000
+    }
+
+    private var moveColumnAnimationDuration: TimeInterval {
+        let fallback = config.animationDurationMS ?? ScrolliniConfig.fallback.animationDurationMS ?? 240
+        return TimeInterval(config.moveColumnAnimationMS ?? fallback) / 1000
+    }
+
+    private var animationCurve: AnimationCurve {
+        config.animationCurve ?? ScrolliniConfig.fallback.animationCurve ?? .smooth
+    }
+
     private var hoverFocusEnabled: Bool {
-        config.hoverToFocus ?? ScrolliniConfig.fallback.hoverToFocus ?? true
+        (config.hoverToFocus ?? ScrolliniConfig.fallback.hoverToFocus ?? true) && hoverFocusMode != .off
     }
 
     private var hoverFocusDelay: TimeInterval {
@@ -1367,15 +1500,67 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private var hoverFocusMaxScrollRatio: CGFloat {
-        config.hoverFocusMaxScrollRatio ?? ScrolliniConfig.fallback.hoverFocusMaxScrollRatio ?? 0.15
+        config.hoverFocusRequiresVisibleRatio
+            ?? config.hoverFocusMaxScrollRatio
+            ?? ScrolliniConfig.fallback.hoverFocusRequiresVisibleRatio
+            ?? ScrolliniConfig.fallback.hoverFocusMaxScrollRatio
+            ?? 0.15
+    }
+
+    private var hoverFocusEdgeTriggerWidth: CGFloat {
+        config.hoverFocusEdgeTriggerWidth ?? ScrolliniConfig.fallback.hoverFocusEdgeTriggerWidth ?? 8
+    }
+
+    private var hoverFocusAfterTrackpad: TimeInterval {
+        let milliseconds: Int
+        if let navigationSpecific = config.trackpadNavigationHoverSuppressionMS,
+           navigationSpecific != (ScrolliniConfig.fallback.trackpadNavigationHoverSuppressionMS ?? 280)
+        {
+            milliseconds = navigationSpecific
+        } else {
+            milliseconds = config.hoverFocusAfterTrackpadMS
+                ?? config.trackpadNavigationHoverSuppressionMS
+                ?? ScrolliniConfig.fallback.hoverFocusAfterTrackpadMS
+                ?? 280
+        }
+        return TimeInterval(milliseconds) / 1000
+    }
+
+    private var hoverFocusMode: HoverFocusMode {
+        config.hoverFocusMode ?? ScrolliniConfig.fallback.hoverFocusMode ?? .edgeOrVisible
     }
 
     private var workspaceAutoBackAndForth: Bool {
         config.workspaceAutoBackAndForth ?? ScrolliniConfig.fallback.workspaceAutoBackAndForth ?? true
     }
 
-    private var centerFocusedColumn: Bool {
-        config.centerFocusedColumn ?? ScrolliniConfig.fallback.centerFocusedColumn ?? true
+    private var focusAlignment: FocusAlignment {
+        if let focusAlignment = config.focusAlignment {
+            return focusAlignment
+        }
+        if let centerFocusedColumn = config.centerFocusedColumn {
+            return centerFocusedColumn ? .smart : .left
+        }
+        if let focusAlignment = ScrolliniConfig.fallback.focusAlignment {
+            return focusAlignment
+        }
+        return (config.centerFocusedColumn ?? ScrolliniConfig.fallback.centerFocusedColumn ?? true) ? .smart : .left
+    }
+
+    private var newWindowPosition: NewWindowPosition {
+        config.newWindowPosition ?? ScrolliniConfig.fallback.newWindowPosition ?? .afterActive
+    }
+
+    private var innerGap: CGFloat {
+        config.innerGap ?? ScrolliniConfig.fallback.innerGap ?? 0
+    }
+
+    private var outerGap: CGFloat {
+        config.outerGap ?? ScrolliniConfig.fallback.outerGap ?? 0
+    }
+
+    private var parkedSliverWidth: CGFloat {
+        config.parkedSliverWidth ?? ScrolliniConfig.fallback.parkedSliverWidth ?? 1
     }
 
     private var trackpadNavigationEnabled: Bool {
@@ -1394,6 +1579,20 @@ final class Scrollini: NSObject, @unchecked Sendable {
         config.trackpadNavigationDeceleration ?? ScrolliniConfig.fallback.trackpadNavigationDeceleration ?? 5.5
     }
 
+    private var trackpadNavigationMomentumMinVelocity: CGFloat {
+        config.trackpadNavigationMomentumMinVelocity
+            ?? ScrolliniConfig.fallback.trackpadNavigationMomentumMinVelocity
+            ?? 80
+    }
+
+    private var trackpadNavigationVelocityGain: CGFloat {
+        config.trackpadNavigationVelocityGain ?? ScrolliniConfig.fallback.trackpadNavigationVelocityGain ?? 1.35
+    }
+
+    private var trackpadNavigationSnap: TrackpadNavigationSnap {
+        config.trackpadNavigationSnap ?? ScrolliniConfig.fallback.trackpadNavigationSnap ?? .nearestColumn
+    }
+
     private var trackpadNavigationInvertX: Bool {
         config.trackpadNavigationInvertX ?? ScrolliniConfig.fallback.trackpadNavigationInvertX ?? false
     }
@@ -1406,18 +1605,43 @@ final class Scrollini: NSObject, @unchecked Sendable {
         config.presetWidthRatios ?? ScrolliniConfig.fallback.presetWidthRatios ?? [0.5, 0.67, 0.8, 1.0]
     }
 
+    private var rescanInterval: TimeInterval {
+        TimeInterval(config.rescanIntervalMS ?? ScrolliniConfig.fallback.rescanIntervalMS ?? 1000) / 1000
+    }
+
+    private var restoreOnExit: Bool {
+        config.restoreOnExit ?? ScrolliniConfig.fallback.restoreOnExit ?? true
+    }
+
+    private var hideMethod: HideMethod {
+        config.hideMethod ?? ScrolliniConfig.fallback.hideMethod ?? .skyLightAlpha
+    }
+
+    private var debugLogging: Bool {
+        config.debugLogging ?? ScrolliniConfig.fallback.debugLogging ?? false
+    }
+
     private func projectLayout(
         focusActiveWindow: Bool,
         animated: Bool = false,
         from previousState: LayoutState? = nil,
+        animationDuration: TimeInterval? = nil,
         layoutLockDelay: TimeInterval = 0.08
     ) {
         let viewport = currentViewport()
         writeRestoreSnapshot(viewport: viewport)
 
         let targetState = captureLayoutState()
-        if animated, animationDuration > 0, let previousState {
-            animateLayout(from: previousState, to: targetState, viewport: viewport, focusActiveWindow: focusActiveWindow)
+        debugLog("layout workspace=\(targetState.activeWorkspace + 1) tiled=\(tiledWindows().count) floating=\(floatingWindows.count) animated=\(animated)")
+        let duration = animationDuration ?? self.animationDuration
+        if animated, duration > 0, let previousState {
+            animateLayout(
+                from: previousState,
+                to: targetState,
+                viewport: viewport,
+                focusActiveWindow: focusActiveWindow,
+                duration: duration
+            )
             return
         }
 
@@ -1450,6 +1674,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
                 let frame: CGRect
                 var projected = strip[columnIndex]
                 projected.origin.y += rowOffset
+                projected = visualFrame(projected, viewport: viewport)
 
                 let visible = projected.intersects(viewport)
                 if visible || !parkHidden {
@@ -1500,30 +1725,30 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
     private func applyLayout(_ layout: [LayoutItem], focusActiveWindow: Bool) {
         for item in layout where !item.visible {
-            SkyLight.shared.setAlpha(0, for: item.window.windowID)
+            setWindowAlpha(0, for: item.window.windowID)
         }
 
         if focusActiveWindow, let activeWindow = self.activeWindow() {
             let inactiveVisible = layout.filter { $0.visible && $0.window !== activeWindow }
             for item in inactiveVisible {
                 setAXFrame(item.frame, for: item.window.element)
-                SkyLight.shared.setAlpha(1, for: item.window.windowID)
+                setWindowAlpha(1, for: item.window.windowID)
             }
 
             if let activeItem = layout.first(where: { $0.window === activeWindow }) {
                 setAXFrame(activeItem.frame, for: activeWindow.element)
-                SkyLight.shared.setAlpha(1, for: activeWindow.windowID)
+                setWindowAlpha(1, for: activeWindow.windowID)
             }
         } else {
             for item in layout where item.visible {
                 setAXFrame(item.frame, for: item.window.element)
-                SkyLight.shared.setAlpha(1, for: item.window.windowID)
+                setWindowAlpha(1, for: item.window.windowID)
             }
         }
 
         for item in layout where !item.visible {
             setAXFrame(item.frame, for: item.window.element)
-            SkyLight.shared.setAlpha(0, for: item.window.windowID)
+            setWindowAlpha(0, for: item.window.windowID)
         }
 
         if focusActiveWindow, let activeWindow = self.activeWindow() {
@@ -1533,8 +1758,22 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
     private func restoreFloatingVisibility() {
         for window in floatingWindows {
-            SkyLight.shared.setAlpha(1, for: window.windowID)
+            setWindowAlpha(1, for: window.windowID)
         }
+    }
+
+    private func setWindowAlpha(_ alpha: Float, for windowID: UInt32?) {
+        guard hideMethod == .skyLightAlpha else {
+            return
+        }
+        SkyLight.shared.setAlpha(alpha, for: windowID)
+    }
+
+    private func debugLog(_ message: String) {
+        guard debugLogging else {
+            return
+        }
+        print("scrollini: \(message)")
     }
 
     private func hoverFocusTarget(
@@ -1554,18 +1793,22 @@ final class Scrollini: NSObject, @unchecked Sendable {
         let state = captureLayoutState()
         let layout = layoutItems(viewport: viewport, state: state, parkHidden: false)
         for item in layout where item.visible && item.frame.contains(point) {
+            guard hoverToFocusAllowed(for: item.window) else {
+                continue
+            }
             guard let loc = location(of: item.window.element), loc.workspace == activeWorkspace else {
                 continue
             }
             if loc.column == workspace.activeColumn {
                 return nil
             }
-            let immediate = hoverFocusEdgeTrigger(
-                targetColumn: loc.column,
-                activeColumn: workspace.activeColumn,
-                point: point,
-                viewport: viewport
-            )
+            let immediate = hoverFocusMode == .edgeOrVisible
+                && hoverFocusEdgeTrigger(
+                    targetColumn: loc.column,
+                    activeColumn: workspace.activeColumn,
+                    point: point,
+                    viewport: viewport
+                )
             guard immediate || hoverFocusCanScroll(
                 toColumn: loc.column,
                 in: workspace,
@@ -1588,6 +1831,24 @@ final class Scrollini: NSObject, @unchecked Sendable {
             && point.x <= viewport.maxX
             && point.y >= viewport.minY
             && point.y <= viewport.maxY
+    }
+
+    private func visualFrame(_ frame: CGRect, viewport: CGRect) -> CGRect {
+        guard innerGap > 0 else {
+            return frame
+        }
+
+        let inset = min(innerGap / 2, frame.width / 3, frame.height / 3)
+        return frame.insetBy(dx: inset, dy: inset)
+    }
+
+    private func insetViewport(_ viewport: CGRect, by inset: CGFloat) -> CGRect {
+        guard inset > 0 else {
+            return viewport
+        }
+
+        let safeInset = min(inset, viewport.width / 3, viewport.height / 3)
+        return viewport.insetBy(dx: safeInset, dy: safeInset)
     }
 
     private func hoverFocusEdgeTrigger(
@@ -1691,7 +1952,12 @@ final class Scrollini: NSObject, @unchecked Sendable {
         workspace.scrollOffset = nil
         let newState = captureLayoutState()
         hoverFocusRequiresRearm = true
-        projectLayout(focusActiveWindow: true, animated: previousState != newState, from: previousState)
+        projectLayout(
+            focusActiveWindow: true,
+            animated: previousState != newState,
+            from: previousState,
+            animationDuration: hoverFocusAnimationDuration
+        )
     }
 
     private func cancelHoverFocus() {
@@ -1717,7 +1983,8 @@ final class Scrollini: NSObject, @unchecked Sendable {
         from previousState: LayoutState,
         to targetState: LayoutState,
         viewport: CGRect,
-        focusActiveWindow: Bool
+        focusActiveWindow: Bool,
+        duration: TimeInterval
     ) {
         stopAnimation(clearPresentation: false)
         isApplyingLayout = true
@@ -1759,7 +2026,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         for motion in motions {
-            SkyLight.shared.setAlpha(motion.participates ? 1 : 0, for: motion.window.windowID)
+            setWindowAlpha(motion.participates ? 1 : 0, for: motion.window.windowID)
         }
 
         let startedAt = CFAbsoluteTimeGetCurrent()
@@ -1771,7 +2038,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
             }
 
             let elapsed = CFAbsoluteTimeGetCurrent() - startedAt
-            let linearProgress = min(max(elapsed / animationDuration, 0), 1)
+            let linearProgress = min(max(elapsed / duration, 0), 1)
             let easedProgress = softSettleCurve(CGFloat(linearProgress))
             applyAnimationFrame(motions, progress: easedProgress, viewport: viewport)
             restoreFloatingVisibility()
@@ -1839,7 +2106,14 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func softSettleCurve(_ progress: CGFloat) -> CGFloat {
-        cubicBezier(progress, x1: 0.16, y1: 0.0, x2: 0.18, y2: 1.0)
+        switch animationCurve {
+        case .linear:
+            return progress
+        case .snappy:
+            return cubicBezier(progress, x1: 0.2, y1: 0.0, x2: 0.0, y2: 1.0)
+        case .smooth:
+            return cubicBezier(progress, x1: 0.16, y1: 0.0, x2: 0.18, y2: 1.0)
+        }
     }
 
     private func cubicBezier(_ progress: CGFloat, x1: CGFloat, y1: CGFloat, x2: CGFloat, y2: CGFloat) -> CGFloat {
@@ -1979,21 +2253,50 @@ final class Scrollini: NSObject, @unchecked Sendable {
         return closestIndex
     }
 
+    private func mostVisibleColumn(in workspace: Workspace, viewport: CGRect, scrollOffset: CGFloat) -> Int {
+        guard !workspace.columns.isEmpty else {
+            return 0
+        }
+
+        let frames = stripFrames(
+            for: workspace,
+            viewport: viewport,
+            activeColumn: workspace.activeColumn,
+            scrollOffset: scrollOffset
+        )
+        var bestIndex = closestColumn(to: scrollOffset, in: workspace, viewport: viewport)
+        var bestVisibleWidth: CGFloat = 0
+        for index in frames.indices {
+            let visibleFrame = visualFrame(frames[index], viewport: viewport).intersection(viewport)
+            let visibleWidth = visibleFrame.isNull ? 0 : visibleFrame.width
+            if visibleWidth > bestVisibleWidth {
+                bestVisibleWidth = visibleWidth
+                bestIndex = index
+            }
+        }
+        return bestIndex
+    }
+
     private func defaultScrollOffset(
         metrics: (origins: [CGFloat], widths: [CGFloat]),
         activeColumn: Int,
         viewport: CGRect
     ) -> CGFloat {
-        guard centerFocusedColumn,
-              activeColumn > 0,
-              metrics.origins.indices.contains(activeColumn),
+        guard metrics.origins.indices.contains(activeColumn),
               metrics.widths.indices.contains(activeColumn)
         else {
-            return metrics.origins.indices.contains(activeColumn) ? metrics.origins[activeColumn] : 0
+            return 0
         }
 
-        let activeCenter = metrics.origins[activeColumn] + metrics.widths[activeColumn] / 2
-        return max(0, activeCenter - viewport.width / 2)
+        switch focusAlignment {
+        case .left:
+            return metrics.origins[activeColumn]
+        case .smart where activeColumn == 0:
+            return metrics.origins.indices.contains(activeColumn) ? metrics.origins[activeColumn] : 0
+        case .smart, .center:
+            let activeCenter = metrics.origins[activeColumn] + metrics.widths[activeColumn] / 2
+            return max(0, activeCenter - viewport.width / 2)
+        }
     }
 
     private func parkedFrame(for window: ManagedWindow, viewport: CGRect, beforeActive: Bool) -> CGRect {
@@ -2027,19 +2330,35 @@ final class Scrollini: NSObject, @unchecked Sendable {
         return .tile
     }
 
+    private func rule(for window: ManagedWindow) -> WindowRule? {
+        config.rules.first { $0.matches(window) }
+    }
+
+    private func hoverToFocusAllowed(for window: ManagedWindow) -> Bool {
+        rule(for: window)?.hoverToFocus ?? true
+    }
+
+    private var trackpadNavigationAllowedForActiveWindow: Bool {
+        guard let window = activeWindow() else {
+            return true
+        }
+        return rule(for: window)?.trackpadNavigation ?? true
+    }
+
     private func currentViewport() -> CGRect {
         guard let screen = NSScreen.main else {
-            return CGDisplayBounds(CGMainDisplayID())
+            return insetViewport(CGDisplayBounds(CGMainDisplayID()), by: outerGap)
         }
 
         let visible = screen.visibleFrame
         let screenFrame = screen.frame
         let axY = screenFrame.maxY - visible.maxY
-        return CGRect(x: visible.minX, y: axY, width: visible.width, height: visible.height)
+        let viewport = CGRect(x: visible.minX, y: axY, width: visible.width, height: visible.height)
+        return insetViewport(viewport, by: outerGap)
     }
 
     private func focus(_ window: ManagedWindow) {
-        SkyLight.shared.setAlpha(1, for: window.windowID)
+        setWindowAlpha(1, for: window.windowID)
         if let app = NSRunningApplication(processIdentifier: window.pid) {
             app.activate(options: [.activateIgnoringOtherApps])
         }
@@ -2064,9 +2383,13 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func restoreManagedWindowsForExit() {
+        guard restoreOnExit else {
+            return
+        }
+
         let viewport = currentViewport()
         for window in tiledWindows() {
-            SkyLight.shared.setAlpha(1, for: window.windowID)
+            setWindowAlpha(1, for: window.windowID)
             setAXFrame(viewport, for: window.element)
         }
         restoreFloatingVisibility()
@@ -2074,6 +2397,11 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func writeRestoreSnapshot(viewport: CGRect) {
+        guard restoreOnExit else {
+            try? FileManager.default.removeItem(at: restoreStateURL)
+            return
+        }
+
         let ids = Array(Set(tiledWindows().compactMap(\.windowID))).sorted()
         guard !ids.isEmpty else {
             try? FileManager.default.removeItem(at: restoreStateURL)

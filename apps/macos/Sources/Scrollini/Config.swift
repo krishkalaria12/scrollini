@@ -7,44 +7,169 @@ enum WindowBehavior: String, Codable {
     case ignore
 }
 
+enum FocusAlignment: String, Codable {
+    case left
+    case center
+    case smart
+}
+
+enum NewWindowPosition: String, Codable {
+    case beforeActive = "before_active"
+    case afterActive = "after_active"
+    case end
+}
+
+enum HideMethod: String, Codable {
+    case skyLightAlpha = "skylight_alpha"
+    case parkOnly = "park_only"
+}
+
+enum AnimationCurve: String, Codable {
+    case smooth
+    case snappy
+    case linear
+}
+
+enum HoverFocusMode: String, Codable {
+    case off
+    case visibleOnly = "visible_only"
+    case edgeOrVisible = "edge_or_visible"
+}
+
+enum TrackpadNavigationSnap: String, Codable {
+    case nearestColumn = "nearest_column"
+    case nearestVisible = "nearest_visible"
+    case none
+}
+
 struct ScrolliniConfig: Codable {
     var defaultWidthRatio: CGFloat
     var presetWidthRatios: [CGFloat]?
     var animationDurationMS: Int?
+    var keyboardAnimationMS: Int?
+    var hoverFocusAnimationMS: Int?
+    var trackpadSettleAnimationMS: Int?
+    var moveColumnAnimationMS: Int?
+    var animationCurve: AnimationCurve?
     var hoverToFocus: Bool?
     var hoverFocusDelayMS: Int?
     var hoverFocusMaxScrollRatio: CGFloat?
+    var hoverFocusRequiresVisibleRatio: CGFloat?
+    var hoverFocusEdgeTriggerWidth: CGFloat?
+    var hoverFocusAfterTrackpadMS: Int?
+    var hoverFocusMode: HoverFocusMode?
     var workspaceAutoBackAndForth: Bool?
     var centerFocusedColumn: Bool?
+    var focusAlignment: FocusAlignment?
+    var newWindowPosition: NewWindowPosition?
+    var innerGap: CGFloat?
+    var outerGap: CGFloat?
+    var parkedSliverWidth: CGFloat?
     var excludedKeybindings: [String]?
+    var keybindings: [String: [String]]?
     var trackpadNavigation: Bool?
     var trackpadNavigationFingers: Int?
     var trackpadNavigationSensitivity: CGFloat?
     var trackpadNavigationDeceleration: CGFloat?
+    var trackpadNavigationHoverSuppressionMS: Int?
+    var trackpadNavigationMomentumMinVelocity: CGFloat?
+    var trackpadNavigationVelocityGain: CGFloat?
+    var trackpadNavigationSettleAnimationMS: Int?
+    var trackpadNavigationSnap: TrackpadNavigationSnap?
     var trackpadNavigationInvertX: Bool?
     var trackpadNavigationInvertY: Bool?
+    var rescanIntervalMS: Int?
+    var restoreOnExit: Bool?
+    var hideMethod: HideMethod?
+    var debugLogging: Bool?
     var rules: [WindowRule]
 
     static let fallback = ScrolliniConfig(
         defaultWidthRatio: 0.8,
         presetWidthRatios: [0.5, 0.67, 0.8, 1.0],
         animationDurationMS: 240,
+        keyboardAnimationMS: 240,
+        hoverFocusAnimationMS: 240,
+        trackpadSettleAnimationMS: 240,
+        moveColumnAnimationMS: 240,
+        animationCurve: .smooth,
         hoverToFocus: true,
         hoverFocusDelayMS: 120,
         hoverFocusMaxScrollRatio: 0.15,
+        hoverFocusRequiresVisibleRatio: 0.15,
+        hoverFocusEdgeTriggerWidth: 8,
+        hoverFocusAfterTrackpadMS: 280,
+        hoverFocusMode: .edgeOrVisible,
         workspaceAutoBackAndForth: true,
         centerFocusedColumn: true,
+        focusAlignment: .smart,
+        newWindowPosition: .afterActive,
+        innerGap: 0,
+        outerGap: 0,
+        parkedSliverWidth: 1,
         excludedKeybindings: ["cmd+shift+5"],
+        keybindings: defaultKeybindings,
         trackpadNavigation: true,
         trackpadNavigationFingers: 3,
         trackpadNavigationSensitivity: 1.6,
         trackpadNavigationDeceleration: 5.5,
+        trackpadNavigationHoverSuppressionMS: 280,
+        trackpadNavigationMomentumMinVelocity: 80,
+        trackpadNavigationVelocityGain: 1.35,
+        trackpadNavigationSettleAnimationMS: 240,
+        trackpadNavigationSnap: .nearestColumn,
         trackpadNavigationInvertX: false,
         trackpadNavigationInvertY: false,
+        rescanIntervalMS: 1000,
+        restoreOnExit: true,
+        hideMethod: .skyLightAlpha,
+        debugLogging: false,
         rules: [
             WindowRule(bundleID: "com.apple.finder", behavior: .ignore),
         ]
     )
+
+    static let defaultKeybindings: [String: [String]] = [
+        "focus_workspace_1": ["cmd+1"],
+        "focus_workspace_2": ["cmd+2"],
+        "focus_workspace_3": ["cmd+3"],
+        "focus_workspace_4": ["cmd+4"],
+        "focus_workspace_5": ["cmd+5"],
+        "focus_workspace_6": ["cmd+6"],
+        "focus_workspace_7": ["cmd+7"],
+        "focus_workspace_8": ["cmd+8"],
+        "focus_workspace_9": ["cmd+9"],
+        "focus_previous_workspace": ["cmd+0"],
+        "workspace_down": ["cmd+j"],
+        "workspace_up": ["cmd+k"],
+        "column_left": ["cmd+h"],
+        "column_right": ["cmd+l"],
+        "column_first": ["cmd+[", "cmd+home"],
+        "column_last": ["cmd+]", "cmd+end"],
+        "move_column_to_workspace_1": ["cmd+shift+1"],
+        "move_column_to_workspace_2": ["cmd+shift+2"],
+        "move_column_to_workspace_3": ["cmd+shift+3"],
+        "move_column_to_workspace_4": ["cmd+shift+4"],
+        "move_column_to_workspace_5": ["cmd+shift+5"],
+        "move_column_to_workspace_6": ["cmd+shift+6"],
+        "move_column_to_workspace_7": ["cmd+shift+7"],
+        "move_column_to_workspace_8": ["cmd+shift+8"],
+        "move_column_to_workspace_9": ["cmd+shift+9"],
+        "move_column_down": ["cmd+shift+j"],
+        "move_column_up": ["cmd+shift+k"],
+        "move_column_left": ["cmd+shift+h"],
+        "move_column_right": ["cmd+shift+l"],
+        "move_column_to_first": ["cmd+shift+[", "cmd+shift+home"],
+        "move_column_to_last": ["cmd+shift+]", "cmd+shift+end"],
+        "cycle_width_preset_backward": ["cmd+ctrl+h"],
+        "cycle_width_preset_forward": ["cmd+ctrl+l"],
+        "nudge_width_narrower": ["cmd+ctrl+-"],
+        "nudge_width_wider": ["cmd+ctrl+="],
+        "cycle_all_width_presets_backward": ["cmd+ctrl+shift+h"],
+        "cycle_all_width_presets_forward": ["cmd+ctrl+shift+l"],
+        "nudge_all_widths_narrower": ["cmd+ctrl+shift+-"],
+        "nudge_all_widths_wider": ["cmd+ctrl+shift+="],
+    ]
 
     static func load() -> ScrolliniConfig {
         let candidates = configCandidates()
@@ -60,14 +185,30 @@ struct ScrolliniConfig: Codable {
                 config.defaultWidthRatio = config.defaultWidthRatio.clampedWidthRatio
                 config.presetWidthRatios = normalizeWidthPresets(config.presetWidthRatios)
                 config.animationDurationMS = config.animationDurationMS.map { min(max($0, 0), 500) }
+                config.keyboardAnimationMS = config.keyboardAnimationMS.map { min(max($0, 0), 500) }
+                config.hoverFocusAnimationMS = config.hoverFocusAnimationMS.map { min(max($0, 0), 500) }
+                config.trackpadSettleAnimationMS = config.trackpadSettleAnimationMS.map { min(max($0, 0), 500) }
+                config.moveColumnAnimationMS = config.moveColumnAnimationMS.map { min(max($0, 0), 500) }
                 config.hoverFocusDelayMS = config.hoverFocusDelayMS.map { min(max($0, 0), 1000) }
                 config.hoverFocusMaxScrollRatio = config.hoverFocusMaxScrollRatio.map { min(max($0, 0), 2) }
+                config.hoverFocusRequiresVisibleRatio = config.hoverFocusRequiresVisibleRatio.map { min(max($0, 0), 2) }
+                config.hoverFocusEdgeTriggerWidth = config.hoverFocusEdgeTriggerWidth.map { min(max($0, 0), 96) }
+                config.hoverFocusAfterTrackpadMS = config.hoverFocusAfterTrackpadMS.map { min(max($0, 0), 2000) }
+                config.innerGap = config.innerGap.map { min(max($0, 0), 96) }
+                config.outerGap = config.outerGap.map { min(max($0, 0), 96) }
+                config.parkedSliverWidth = config.parkedSliverWidth.map { min(max($0, 0), 32) }
                 config.trackpadNavigationFingers = config.trackpadNavigationFingers.map { min(max($0, 2), 5) }
                 config.trackpadNavigationSensitivity = config.trackpadNavigationSensitivity.map { min(max($0, 0.1), 20) }
                 config.trackpadNavigationDeceleration = config.trackpadNavigationDeceleration.map { min(max($0, 1), 30) }
+                config.trackpadNavigationHoverSuppressionMS = config.trackpadNavigationHoverSuppressionMS.map { min(max($0, 0), 2000) }
+                config.trackpadNavigationMomentumMinVelocity = config.trackpadNavigationMomentumMinVelocity.map { min(max($0, 0), 5000) }
+                config.trackpadNavigationVelocityGain = config.trackpadNavigationVelocityGain.map { min(max($0, 0), 5) }
+                config.trackpadNavigationSettleAnimationMS = config.trackpadNavigationSettleAnimationMS.map { min(max($0, 0), 500) }
+                config.rescanIntervalMS = config.rescanIntervalMS.map { min(max($0, 100), 5000) }
                 config.rules = config.rules.map { rule in
                     var rule = rule
                     rule.widthRatio = rule.widthRatio.map(\.clampedWidthRatio)
+                    rule.workspace = rule.workspace.map { min(max($0, 1), 99) }
                     return rule
                 }
                 print("scrollini: loaded config \(url.path)")
@@ -117,18 +258,42 @@ struct ScrolliniConfig: Codable {
         case defaultWidthRatio = "default_width_ratio"
         case presetWidthRatios = "preset_width_ratios"
         case animationDurationMS = "animation_duration_ms"
+        case keyboardAnimationMS = "keyboard_animation_ms"
+        case hoverFocusAnimationMS = "hover_focus_animation_ms"
+        case trackpadSettleAnimationMS = "trackpad_settle_animation_ms"
+        case moveColumnAnimationMS = "move_column_animation_ms"
+        case animationCurve = "animation_curve"
         case hoverToFocus = "hover_to_focus"
         case hoverFocusDelayMS = "hover_focus_delay_ms"
         case hoverFocusMaxScrollRatio = "hover_focus_max_scroll_ratio"
+        case hoverFocusRequiresVisibleRatio = "hover_focus_requires_visible_ratio"
+        case hoverFocusEdgeTriggerWidth = "hover_focus_edge_trigger_width"
+        case hoverFocusAfterTrackpadMS = "hover_focus_after_trackpad_ms"
+        case hoverFocusMode = "hover_focus_mode"
         case workspaceAutoBackAndForth = "workspace_auto_back_and_forth"
         case centerFocusedColumn = "center_focused_column"
+        case focusAlignment = "focus_alignment"
+        case newWindowPosition = "new_window_position"
+        case innerGap = "inner_gap"
+        case outerGap = "outer_gap"
+        case parkedSliverWidth = "parked_sliver_width"
         case excludedKeybindings = "excluded_keybindings"
+        case keybindings
         case trackpadNavigation = "trackpad_navigation"
         case trackpadNavigationFingers = "trackpad_navigation_fingers"
         case trackpadNavigationSensitivity = "trackpad_navigation_sensitivity"
         case trackpadNavigationDeceleration = "trackpad_navigation_deceleration"
+        case trackpadNavigationHoverSuppressionMS = "trackpad_navigation_hover_suppression_ms"
+        case trackpadNavigationMomentumMinVelocity = "trackpad_navigation_momentum_min_velocity"
+        case trackpadNavigationVelocityGain = "trackpad_navigation_velocity_gain"
+        case trackpadNavigationSettleAnimationMS = "trackpad_navigation_settle_animation_ms"
+        case trackpadNavigationSnap = "trackpad_navigation_snap"
         case trackpadNavigationInvertX = "trackpad_navigation_invert_x"
         case trackpadNavigationInvertY = "trackpad_navigation_invert_y"
+        case rescanIntervalMS = "rescan_interval_ms"
+        case restoreOnExit = "restore_on_exit"
+        case hideMethod = "hide_method"
+        case debugLogging = "debug_logging"
         case rules
     }
 }
@@ -139,19 +304,31 @@ struct WindowRule: Codable {
     var titleContains: String?
     var behavior: WindowBehavior?
     var widthRatio: CGFloat?
+    var workspace: Int?
+    var openPosition: NewWindowPosition?
+    var trackpadNavigation: Bool?
+    var hoverToFocus: Bool?
 
     init(
         bundleID: String? = nil,
         appName: String? = nil,
         titleContains: String? = nil,
         behavior: WindowBehavior? = nil,
-        widthRatio: CGFloat? = nil
+        widthRatio: CGFloat? = nil,
+        workspace: Int? = nil,
+        openPosition: NewWindowPosition? = nil,
+        trackpadNavigation: Bool? = nil,
+        hoverToFocus: Bool? = nil
     ) {
         self.bundleID = bundleID
         self.appName = appName
         self.titleContains = titleContains
         self.behavior = behavior
         self.widthRatio = widthRatio
+        self.workspace = workspace
+        self.openPosition = openPosition
+        self.trackpadNavigation = trackpadNavigation
+        self.hoverToFocus = hoverToFocus
     }
 
     func matches(_ window: ManagedWindow) -> Bool {
@@ -175,6 +352,10 @@ struct WindowRule: Codable {
         case titleContains = "title_contains"
         case behavior
         case widthRatio = "width_ratio"
+        case workspace
+        case openPosition = "open_position"
+        case trackpadNavigation = "trackpad_navigation"
+        case hoverToFocus = "hover_to_focus"
     }
 }
 
