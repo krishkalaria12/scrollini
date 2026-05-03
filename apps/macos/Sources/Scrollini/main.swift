@@ -74,6 +74,7 @@ private struct ScrolliniConfig: Codable {
     var animationDurationMS: Int?
     var hoverToFocus: Bool?
     var hoverFocusDelayMS: Int?
+    var hoverFocusMaxScrollRatio: CGFloat?
     var rules: [WindowRule]
 
     static let fallback = ScrolliniConfig(
@@ -82,6 +83,7 @@ private struct ScrolliniConfig: Codable {
         animationDurationMS: 180,
         hoverToFocus: true,
         hoverFocusDelayMS: 120,
+        hoverFocusMaxScrollRatio: 0.15,
         rules: [
             WindowRule(bundleID: "com.apple.finder", behavior: .ignore),
             WindowRule(bundleID: "com.t3tools.t3code", widthRatio: 1.0),
@@ -105,6 +107,7 @@ private struct ScrolliniConfig: Codable {
                 config.presetWidthRatios = normalizeWidthPresets(config.presetWidthRatios)
                 config.animationDurationMS = config.animationDurationMS.map { min(max($0, 0), 500) }
                 config.hoverFocusDelayMS = config.hoverFocusDelayMS.map { min(max($0, 0), 1000) }
+                config.hoverFocusMaxScrollRatio = config.hoverFocusMaxScrollRatio.map { min(max($0, 0), 2) }
                 config.rules = config.rules.map { rule in
                     var rule = rule
                     rule.widthRatio = rule.widthRatio.map(\.clampedWidthRatio)
@@ -159,6 +162,7 @@ private struct ScrolliniConfig: Codable {
         case animationDurationMS = "animation_duration_ms"
         case hoverToFocus = "hover_to_focus"
         case hoverFocusDelayMS = "hover_focus_delay_ms"
+        case hoverFocusMaxScrollRatio = "hover_focus_max_scroll_ratio"
         case rules
     }
 }
@@ -445,11 +449,13 @@ private final class Scrollini: NSObject, @unchecked Sendable {
     private var animationTimer: DispatchSourceTimer?
     private var hoverFocusTimer: DispatchSourceTimer?
     private var hoverFocusTarget: ObjectIdentifier?
+    private var hoverFocusRequiresRearm = false
     private var manualResizeEndTimer: DispatchSourceTimer?
     private var manualResizeElement: AXUIElement?
     private var presentationFrames: [ObjectIdentifier: CGRect] = [:]
     private let parkedSliverWidth: CGFloat = 1
     private var signalSources: [DispatchSourceSignal] = []
+    private let hoverFocusEdgeTriggerWidth: CGFloat = 8
     private let restoreStateURL = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("scrollini-\(ProcessInfo.processInfo.processIdentifier).restore.json")
     private var cleanupWatcher: Process?
@@ -659,16 +665,27 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             return
         }
 
-        guard let target = hoverFocusTarget(at: event.location) else {
+        let point = event.location
+        if shouldSuppressHoverFocusUntilRearmed(at: point) {
             cancelHoverFocus()
             return
         }
 
-        scheduleHoverFocus(for: target.window, workspaceIndex: target.workspaceIndex, columnIndex: target.columnIndex)
+        guard let target = hoverFocusTarget(at: point) else {
+            cancelHoverFocus()
+            return
+        }
+
+        if target.immediate {
+            performHoverFocus(window: target.window, workspaceIndex: target.workspaceIndex, columnIndex: target.columnIndex)
+        } else {
+            scheduleHoverFocus(for: target.window, workspaceIndex: target.workspaceIndex, columnIndex: target.columnIndex)
+        }
     }
 
     private func perform(_ command: Command) {
         cancelHoverFocus()
+        hoverFocusRequiresRearm = false
         rescanWindows(adoptFocused: false)
         let previousState = captureLayoutState()
         var animated = false
@@ -1184,6 +1201,10 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         TimeInterval(config.hoverFocusDelayMS ?? ScrolliniConfig.fallback.hoverFocusDelayMS ?? 120) / 1000
     }
 
+    private var hoverFocusMaxScrollRatio: CGFloat {
+        config.hoverFocusMaxScrollRatio ?? ScrolliniConfig.fallback.hoverFocusMaxScrollRatio ?? 0.15
+    }
+
     private var widthPresetRatios: [CGFloat] {
         config.presetWidthRatios ?? ScrolliniConfig.fallback.presetWidthRatios ?? [0.5, 0.67, 0.8, 1.0]
     }
@@ -1305,7 +1326,9 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         }
     }
 
-    private func hoverFocusTarget(at point: CGPoint) -> (window: ManagedWindow, workspaceIndex: Int, columnIndex: Int)? {
+    private func hoverFocusTarget(
+        at point: CGPoint
+    ) -> (window: ManagedWindow, workspaceIndex: Int, columnIndex: Int, immediate: Bool)? {
         guard let workspace = activeWorkspaceObject(),
               !workspace.columns.isEmpty
         else {
@@ -1313,7 +1336,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         let viewport = currentViewport()
-        guard viewport.contains(point) else {
+        guard viewportContains(point, viewport: viewport) else {
             return nil
         }
 
@@ -1326,10 +1349,86 @@ private final class Scrollini: NSObject, @unchecked Sendable {
             if loc.column == workspace.activeColumn {
                 return nil
             }
-            return (item.window, loc.workspace, loc.column)
+            let immediate = hoverFocusEdgeTrigger(
+                targetColumn: loc.column,
+                activeColumn: workspace.activeColumn,
+                point: point,
+                viewport: viewport
+            )
+            guard immediate || hoverFocusCanScroll(
+                toColumn: loc.column,
+                in: workspace,
+                workspaceIndex: loc.workspace,
+                state: state,
+                viewport: viewport,
+                targetFrame: item.frame,
+                point: point
+            ) else {
+                continue
+            }
+            return (item.window, loc.workspace, loc.column, immediate)
         }
 
         return nil
+    }
+
+    private func viewportContains(_ point: CGPoint, viewport: CGRect) -> Bool {
+        point.x >= viewport.minX
+            && point.x <= viewport.maxX
+            && point.y >= viewport.minY
+            && point.y <= viewport.maxY
+    }
+
+    private func hoverFocusEdgeTrigger(
+        targetColumn: Int,
+        activeColumn: Int,
+        point: CGPoint,
+        viewport: CGRect
+    ) -> Bool {
+        if targetColumn > activeColumn {
+            return point.x >= viewport.maxX - hoverFocusEdgeTriggerWidth
+        }
+        if targetColumn < activeColumn {
+            return point.x <= viewport.minX + hoverFocusEdgeTriggerWidth
+        }
+        return false
+    }
+
+    private func hoverFocusCanScroll(
+        toColumn targetColumn: Int,
+        in workspace: Workspace,
+        workspaceIndex: Int,
+        state: LayoutState,
+        viewport: CGRect,
+        targetFrame: CGRect,
+        point: CGPoint
+    ) -> Bool {
+        guard viewport.width > 0 else {
+            return false
+        }
+
+        guard workspace.columns.indices.contains(targetColumn) else {
+            return false
+        }
+
+        let activeColumn = activeColumn(in: workspace, workspaceIndex: workspaceIndex, state: state)
+        let requiredDepth = viewport.width * hoverFocusMaxScrollRatio
+        guard requiredDepth > 0 else {
+            return false
+        }
+
+        let visibleTargetFrame = targetFrame.intersection(viewport)
+        guard !visibleTargetFrame.isNull else {
+            return false
+        }
+
+        if targetColumn > activeColumn {
+            return point.x - visibleTargetFrame.minX >= requiredDepth
+        }
+        if targetColumn < activeColumn {
+            return visibleTargetFrame.maxX - point.x >= requiredDepth
+        }
+        return false
     }
 
     private func scheduleHoverFocus(for window: ManagedWindow, workspaceIndex: Int, columnIndex: Int) {
@@ -1378,6 +1477,7 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         workspace.activeColumn = columnIndex
         workspace.scrollOffset = nil
         let newState = captureLayoutState()
+        hoverFocusRequiresRearm = true
         projectLayout(focusActiveWindow: true, animated: previousState != newState, from: previousState)
     }
 
@@ -1385,6 +1485,19 @@ private final class Scrollini: NSObject, @unchecked Sendable {
         hoverFocusTimer?.cancel()
         hoverFocusTimer = nil
         hoverFocusTarget = nil
+    }
+
+    private func shouldSuppressHoverFocusUntilRearmed(at point: CGPoint) -> Bool {
+        guard hoverFocusRequiresRearm else {
+            return false
+        }
+
+        if hoverFocusTarget(at: point) == nil {
+            hoverFocusRequiresRearm = false
+            return false
+        }
+
+        return true
     }
 
     private func animateLayout(

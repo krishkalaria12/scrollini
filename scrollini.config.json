@@ -4,6 +4,7 @@
   "animation_duration_ms": 180,
   "hover_to_focus": true,
   "hover_focus_delay_ms": 120,
+  "hover_focus_max_scroll_ratio": 0.15,
   "rules": [
     {
       "bundle_id": "com.apple.finder",

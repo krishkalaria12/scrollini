@@ -25,6 +25,12 @@ normal app windows into a virtual grid:
   tracked as a short live session so fast drags do not lose the final width.
 - `hover_to_focus` can focus a visible neighboring tiled column after the
   pointer rests on it, using the same animated projection as keyboard focus.
+  `hover_focus_max_scroll_ratio` sets how far into a visible neighboring sliver
+  the pointer must move, as a fraction of the screen width, before delayed hover
+  focus scrolls there. Touching the far left or right edge on a visible
+  neighboring sliver focuses it immediately. After hover focus moves to a
+  window, the pointer must leave the next hover target before another hover
+  focus can fire, preventing chained jumps.
 - Neighboring/off-workspace windows are parked just past the side edge so macOS
   does not forcibly relocate them, then hidden with SkyLight window alpha when
   available.
@@ -83,6 +89,7 @@ The repo includes this default:
   "animation_duration_ms": 180,
   "hover_to_focus": true,
   "hover_focus_delay_ms": 120,
+  "hover_focus_max_scroll_ratio": 0.15,
   "rules": [
     {
       "bundle_id": "com.apple.finder",
