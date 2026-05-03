@@ -1,0 +1,24 @@
+{
+  "default_width_ratio": 0.8,
+  "animation_duration_ms": 180,
+  "hover_to_focus": true,
+  "hover_focus_delay_ms": 120,
+  "rules": [
+    {
+      "bundle_id": "com.apple.finder",
+      "behavior": "ignore"
+    },
+    {
+      "bundle_id": "com.t3tools.t3code",
+      "width_ratio": 1.0
+    },
+    {
+      "app_name": "T3 Code (Nightly)",
+      "width_ratio": 1.0
+    },
+    {
+      "title_contains": "T3 Code",
+      "width_ratio": 1.0
+    }
+  ]
+}
