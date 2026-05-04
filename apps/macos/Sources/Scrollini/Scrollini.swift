@@ -12,6 +12,10 @@ final class Scrollini: NSObject, @unchecked Sendable {
         var invertY: Bool
     }
 
+    private struct TransientSystemWindow {
+        var element: AXUIElement
+    }
+
     private var loadedConfig = ScrolliniConfig.loadWithMetadata()
     private var config: ScrolliniConfig {
         loadedConfig.config
@@ -32,6 +36,8 @@ final class Scrollini: NSObject, @unchecked Sendable {
     private var hoverFocusTarget: ObjectIdentifier?
     private var hoverFocusRequiresRearm = false
     private var hoverFocusSuppressedUntil: CFAbsoluteTime = 0
+    private var transientWindowActive = false
+    private var transientWindowStateCheckedAt: CFAbsoluteTime = 0
     private var trackpadNavigation: ThreeFingerTrackpadNavigation?
     private var trackpadCameraY: CGFloat?
     private var trackpadCameraVelocity = CGPoint.zero
@@ -95,7 +101,13 @@ final class Scrollini: NSObject, @unchecked Sendable {
         guard !reloadConfigIfNeeded() else {
             return
         }
-        rescanWindows(adoptFocused: false)
+        let wasTransient = transientWindowActive
+        guard !transientSystemWindowIsActive(forceRefresh: true) else {
+            cancelHoverFocus()
+            clearTrackpadCamera()
+            return
+        }
+        rescanWindows(adoptFocused: wasTransient)
     }
 
     @discardableResult
@@ -286,6 +298,10 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     fileprivate func handleKeyEvent(_ event: CGEvent) -> Bool {
+        guard !transientSystemWindowIsActive() else {
+            return false
+        }
+
         let modifiers = event.flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate])
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -563,6 +579,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
     fileprivate func handleMouseMoved(_ event: CGEvent) {
         guard hoverFocusEnabled,
+              !transientSystemWindowIsActive(),
               manualResizeElement == nil,
               animationTimer == nil,
               !isApplyingLayout
@@ -596,6 +613,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
     private func handleTrackpadNavigationEvent(_ event: TrackpadNavigationEvent) {
         guard trackpadNavigationEnabled,
+              !transientSystemWindowIsActive(),
               trackpadNavigationAllowedForActiveWindow
         else {
             return
@@ -1317,6 +1335,11 @@ final class Scrollini: NSObject, @unchecked Sendable {
         guard !isApplyingLayout else {
             return
         }
+        guard !transientSystemWindowIsActive(forceRefresh: true) else {
+            cancelHoverFocus()
+            clearTrackpadCamera()
+            return
+        }
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
             return
         }
@@ -1342,6 +1365,12 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     private func rescanWindows(adoptFocused: Bool) {
+        guard !transientSystemWindowIsActive() else {
+            cancelHoverFocus()
+            clearTrackpadCamera()
+            return
+        }
+
         let discovered = discoverWindows()
         var changed = false
 
@@ -1913,6 +1942,125 @@ final class Scrollini: NSObject, @unchecked Sendable {
         for window in floatingWindows {
             setWindowAlpha(1, for: window.windowID)
         }
+    }
+
+    private func transientSystemWindowIsActive(forceRefresh: Bool = false) -> Bool {
+        let now = CFAbsoluteTimeGetCurrent()
+        if !forceRefresh, now - transientWindowStateCheckedAt < 0.25 {
+            return transientWindowActive
+        }
+
+        transientWindowStateCheckedAt = now
+        let activeTransientWindows = transientSystemWindows()
+        recoverTransientSystemWindows(activeTransientWindows)
+        transientWindowActive = !activeTransientWindows.isEmpty
+        return transientWindowActive
+    }
+
+    private func transientSystemWindows() -> [TransientSystemWindow] {
+        transientCheckApplications.compactMap { app in
+            guard let window = focusedWindow(for: app),
+                  isTransientSystemWindow(window, app: app)
+            else {
+                return nil
+            }
+            return TransientSystemWindow(element: window)
+        }
+    }
+
+    @discardableResult
+    private func recoverTransientSystemWindows(_ windows: [TransientSystemWindow]) -> Bool {
+        guard !windows.isEmpty else {
+            return false
+        }
+
+        let viewport = currentViewport()
+        var moved = false
+        for transient in windows {
+            setWindowAlpha(1, for: SkyLight.shared.windowID(for: transient.element))
+            if let frame = axFrame(transient.element), transientFrameNeedsRecovery(frame, viewport: viewport) {
+                setAXPosition(centeredOrigin(for: frame, in: viewport), for: transient.element)
+                moved = true
+            }
+            AXUIElementPerformAction(transient.element, kAXRaiseAction as CFString)
+        }
+        return moved
+    }
+
+    private func transientFrameNeedsRecovery(_ frame: CGRect, viewport: CGRect) -> Bool {
+        !frame.intersects(viewport)
+            || frame.midX < viewport.minX
+            || frame.midX > viewport.maxX
+            || frame.midY < viewport.minY
+            || frame.midY > viewport.maxY
+    }
+
+    private func centeredOrigin(for frame: CGRect, in viewport: CGRect) -> CGPoint {
+        CGPoint(
+            x: viewport.midX - frame.width / 2,
+            y: viewport.midY - frame.height / 2
+        )
+    }
+
+    private var transientCheckApplications: [NSRunningApplication] {
+        var apps: [NSRunningApplication] = []
+        if let frontmostApplication = NSWorkspace.shared.frontmostApplication {
+            apps.append(frontmostApplication)
+        }
+        for app in NSWorkspace.shared.runningApplications where app.isActive {
+            if !apps.contains(where: { $0.processIdentifier == app.processIdentifier }) {
+                apps.append(app)
+            }
+        }
+        for panelService in openAndSavePanelServices(matchingAnyHostIn: apps) {
+            if !apps.contains(where: { $0.processIdentifier == panelService.processIdentifier }) {
+                apps.append(panelService)
+            }
+        }
+        return apps
+    }
+
+    private func openAndSavePanelServices(matchingAnyHostIn hosts: [NSRunningApplication]) -> [NSRunningApplication] {
+        let hostNames = hosts.compactMap(\.localizedName)
+        guard !hostNames.isEmpty else {
+            return []
+        }
+
+        return NSWorkspace.shared.runningApplications.filter { app in
+            guard isOpenAndSavePanelService(app),
+                  let name = app.localizedName
+            else {
+                return false
+            }
+            return hostNames.contains { name.contains("(\($0))") }
+        }
+    }
+
+    private func isOpenAndSavePanelService(_ app: NSRunningApplication) -> Bool {
+        app.bundleIdentifier == "com.apple.appkit.xpc.openAndSavePanelService"
+    }
+
+    private func focusedWindow(for app: NSRunningApplication) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let value
+        else {
+            return nil
+        }
+        return (value as! AXUIElement)
+    }
+
+    private func isTransientSystemWindow(_ element: AXUIElement, app: NSRunningApplication) -> Bool {
+        let role = axString(element, kAXRoleAttribute)
+        let subrole = axString(element, kAXSubroleAttribute)
+        if role == kAXSheetRole || role == "AXSheet" || role == "AXDialog" {
+            return true
+        }
+        if subrole == "AXSystemDialog" || subrole == "AXDialog" {
+            return true
+        }
+        return isOpenAndSavePanelService(app)
     }
 
     private func setWindowAlpha(_ alpha: Float, for windowID: UInt32?) {
@@ -2966,6 +3114,12 @@ final class Scrollini: NSObject, @unchecked Sendable {
     }
 
     fileprivate func handleAXNotification(_ name: String, element: AXUIElement) {
+        if transientSystemWindowIsActive(forceRefresh: true) {
+            cancelHoverFocus()
+            clearTrackpadCamera()
+            return
+        }
+
         switch name {
         case kAXFocusedWindowChangedNotification:
             var pid: pid_t = 0
