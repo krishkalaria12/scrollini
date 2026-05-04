@@ -29,9 +29,17 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var eventTapSource: CFRunLoopSource?
     private var commandByKeybinding: [String: Command] = [:]
     private var excludedKeybindingSet = Set<String>()
+    private var pendingColumnNavigationDelta = 0
+    private var pendingColumnNavigationTimer: DispatchSourceTimer?
     private var rescanTimer: Timer?
     private var isApplyingLayout = false
     private var animationTimer: DispatchSourceTimer?
+    private var animationGeneration: UInt64 = 0
+    private var focusedWindowAdoptionSuppressedUntil: CFAbsoluteTime = 0
+    private var expectedFocusedWindow: ObjectIdentifier?
+    private var expectedFocusedWindowUntil: CFAbsoluteTime = 0
+    private var focusRequestGeneration: UInt64 = 0
+    private var focusVerificationGeneration: UInt64 = 0
     private var hoverFocusTimer: DispatchSourceTimer?
     private var hoverFocusTarget: ObjectIdentifier?
     private var hoverFocusRequiresRearm = false
@@ -551,6 +559,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         CGEvent.tapEnable(tap: tap, enable: true)
     }
 
+    fileprivate func reenableEventTap() {
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: true)
+        }
+    }
+
     private func installTrackpadNavigation() {
         guard trackpadNavigationEnabled else {
             return
@@ -616,9 +630,53 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         DispatchQueue.main.async { [weak self] in
-            self?.perform(command)
+            self?.handle(command)
         }
         return true
+    }
+
+    private func handle(_ command: Command) {
+        switch command {
+        case .columnLeft:
+            enqueueColumnNavigation(delta: -1)
+        case .columnRight:
+            enqueueColumnNavigation(delta: 1)
+        default:
+            flushPendingColumnNavigation()
+            perform(command)
+        }
+    }
+
+    private func enqueueColumnNavigation(delta: Int) {
+        guard delta != 0 else {
+            return
+        }
+
+        pendingColumnNavigationDelta += delta
+        guard pendingColumnNavigationTimer == nil else {
+            return
+        }
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(12), leeway: .milliseconds(2))
+        timer.setEventHandler { [weak self] in
+            self?.flushPendingColumnNavigation()
+        }
+        pendingColumnNavigationTimer = timer
+        timer.resume()
+    }
+
+    private func flushPendingColumnNavigation() {
+        pendingColumnNavigationTimer?.cancel()
+        pendingColumnNavigationTimer = nil
+
+        let delta = pendingColumnNavigationDelta
+        pendingColumnNavigationDelta = 0
+        guard delta != 0 else {
+            return
+        }
+
+        performColumnNavigation(by: delta)
     }
 
     private func makeCommandByKeybinding() -> [String: Command] {
@@ -1027,7 +1085,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         trackpadMomentumLastFrameAt = CFAbsoluteTimeGetCurrent()
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
+        timer.schedule(deadline: .now() + .milliseconds(16), repeating: .milliseconds(16), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in
             self?.stepTrackpadMomentum()
         }
@@ -1041,7 +1099,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
+        timer.schedule(deadline: .now() + .milliseconds(16), repeating: .milliseconds(16), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in
             self?.flushTrackpadCameraFrame()
         }
@@ -1208,6 +1266,33 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         trackpadCameraVelocity = .zero
     }
 
+    private func performColumnNavigation(by delta: Int) {
+        guard !transientSystemWindowIsActive() else {
+            return
+        }
+
+        clearTrackpadCamera()
+        cancelHoverFocus()
+        hoverFocusRequiresRearm = false
+
+        let previousState = captureLayoutState()
+        guard focusColumn(relativeOffset: delta) else {
+            return
+        }
+
+        let newState = captureLayoutState()
+        markExpectedFocusedWindow(for: activeWindow(), duration: columnNavigationAnimationDuration + 1.0)
+        debugLog("column navigation delta=\(delta) workspace=\(newState.activeWorkspace + 1)")
+
+        projectLayout(
+            focusActiveWindow: true,
+            animated: previousState != newState,
+            from: previousState,
+            animationDuration: columnNavigationAnimationDuration,
+            prefocusActiveWindow: shouldPrefocusColumnNavigation(from: previousState)
+        )
+    }
+
     private func perform(_ command: Command, animateWorkspace: Bool = false) {
         clearTrackpadCamera()
         cancelHoverFocus()
@@ -1238,18 +1323,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             activeWorkspaceObject()?.clampFocus()
             animated = animateWorkspace
         case .columnLeft:
-            guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
+            guard focusColumn(relativeOffset: -1) else {
                 return
             }
-            workspace.activeColumn = max(workspace.activeColumn - 1, 0)
-            workspace.scrollOffset = nil
             animated = true
         case .columnRight:
-            guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
+            guard focusColumn(relativeOffset: 1) else {
                 return
             }
-            workspace.activeColumn = min(workspace.activeColumn + 1, workspace.columns.count - 1)
-            workspace.scrollOffset = nil
             animated = true
         case .columnFirst:
             guard focusColumn(at: 0) else {
@@ -1429,6 +1510,49 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         workspace.activeColumn = targetIndex
         workspace.scrollOffset = nil
         return true
+    }
+
+    private func focusColumn(relativeOffset delta: Int) -> Bool {
+        guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
+            return false
+        }
+
+        workspace.clampFocus()
+        let sourceIndex = workspace.activeColumn
+        let targetIndex = min(max(sourceIndex + delta, 0), workspace.columns.count - 1)
+        guard targetIndex != sourceIndex else {
+            return false
+        }
+
+        workspace.activeColumn = targetIndex
+        workspace.scrollOffset = nil
+        return true
+    }
+
+    private func shouldPrefocusColumnNavigation(from previousState: LayoutState) -> Bool {
+        let threshold: CGFloat = 0.98
+        let sourceIsFullWidth = activeWindow(in: previousState).map { widthRatio(for: $0) >= threshold } ?? false
+        let targetIsFullWidth = activeWindow().map { widthRatio(for: $0) >= threshold } ?? false
+        return sourceIsFullWidth || targetIsFullWidth
+    }
+
+    private func activeWindow(in state: LayoutState) -> ManagedWindow? {
+        guard !workspaces.isEmpty else {
+            return nil
+        }
+
+        let workspaceIndex = min(max(state.activeWorkspace, 0), workspaces.count - 1)
+        let workspace = workspaces[workspaceIndex]
+        guard !workspace.columns.isEmpty else {
+            return nil
+        }
+
+        let columnIndex = activeColumn(in: workspace, workspaceIndex: workspaceIndex, state: state)
+        guard workspace.columns.indices.contains(columnIndex) else {
+            return nil
+        }
+
+        return workspace.columns[columnIndex]
     }
 
     private func moveActiveColumnHorizontally(by delta: Int) -> Bool {
@@ -1633,9 +1757,6 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     @objc private func applicationActivated(_ notification: Notification) {
-        guard !isApplyingLayout else {
-            return
-        }
         guard !transientSystemWindowIsActive(forceRefresh: true) else {
             cancelHoverFocus()
             clearTrackpadCamera()
@@ -1647,12 +1768,24 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
             return
         }
+        guard !reconcileExpectedFocusChange(pid: app.processIdentifier) else {
+            return
+        }
+        guard !shouldSuppressFocusedWindowAdoption else {
+            return
+        }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            self?.rescanWindows(adoptFocused: false)
-            self?.adoptFocusedWindow(pid: app.processIdentifier)
+            guard let self,
+                  !reconcileExpectedFocusChange(pid: app.processIdentifier),
+                  !shouldSuppressFocusedWindowAdoption
+            else {
+                return
+            }
+            rescanWindows(adoptFocused: false)
+            adoptFocusedWindow(pid: app.processIdentifier, respectFocusSuppression: true)
         }
-        adoptFocusedWindow(pid: app.processIdentifier)
+        adoptFocusedWindow(pid: app.processIdentifier, respectFocusSuppression: true)
     }
 
     @objc private func applicationLaunched(_ notification: Notification) {
@@ -1928,6 +2061,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return TimeInterval(config.keyboardAnimationMS ?? fallback) / 1000
     }
 
+    private var columnNavigationAnimationDuration: TimeInterval {
+        guard animationTimer != nil else {
+            return keyboardAnimationDuration
+        }
+
+        return min(keyboardAnimationDuration, max(keyboardAnimationDuration * 0.75, 0.12))
+    }
+
     private var hoverFocusAnimationDuration: TimeInterval {
         let fallback = config.animationDurationMS ?? ScrolliniConfig.fallback.animationDurationMS ?? 240
         return TimeInterval(config.hoverFocusAnimationMS ?? fallback) / 1000
@@ -2105,12 +2246,62 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         config.debugLogging ?? ScrolliniConfig.fallback.debugLogging ?? false
     }
 
+    private var shouldSuppressFocusedWindowAdoption: Bool {
+        isApplyingLayout
+            || animationTimer != nil
+            || expectedFocusedWindowID() != nil
+            || CFAbsoluteTimeGetCurrent() < focusedWindowAdoptionSuppressedUntil
+    }
+
+    private func suppressFocusedWindowAdoption(for duration: TimeInterval) {
+        guard duration > 0 else {
+            return
+        }
+
+        let until = CFAbsoluteTimeGetCurrent() + duration
+        focusedWindowAdoptionSuppressedUntil = max(focusedWindowAdoptionSuppressedUntil, until)
+    }
+
+    private func markExpectedFocusedWindow(for window: ManagedWindow?, duration: TimeInterval) {
+        guard let window else {
+            expectedFocusedWindow = nil
+            expectedFocusedWindowUntil = 0
+            return
+        }
+
+        expectedFocusedWindow = ObjectIdentifier(window)
+        expectedFocusedWindowUntil = max(expectedFocusedWindowUntil, CFAbsoluteTimeGetCurrent() + max(duration, 0.25))
+    }
+
+    private func expectedFocusedWindowID() -> ObjectIdentifier? {
+        guard let expectedFocusedWindow else {
+            return nil
+        }
+
+        guard CFAbsoluteTimeGetCurrent() <= expectedFocusedWindowUntil else {
+            self.expectedFocusedWindow = nil
+            expectedFocusedWindowUntil = 0
+            return nil
+        }
+
+        return expectedFocusedWindow
+    }
+
+    private func settleExpectedFocusedWindow(if window: ManagedWindow) {
+        guard expectedFocusedWindow == ObjectIdentifier(window) else {
+            return
+        }
+
+        expectedFocusedWindowUntil = max(expectedFocusedWindowUntil, CFAbsoluteTimeGetCurrent() + 0.75)
+    }
+
     private func projectLayout(
         focusActiveWindow: Bool,
         animated: Bool = false,
         from previousState: LayoutState? = nil,
         animationDuration: TimeInterval? = nil,
-        layoutLockDelay: TimeInterval = 0.08
+        layoutLockDelay: TimeInterval = 0.08,
+        prefocusActiveWindow: Bool = false
     ) {
         let viewport = currentViewport()
         writeRestoreSnapshot(viewport: viewport)
@@ -2121,12 +2312,20 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         debugLog("layout workspace=\(targetState.activeWorkspace + 1) tiled=\(tiledWindows().count) floating=\(floatingWindows.count) animated=\(animated)")
         let duration = animationDuration ?? self.animationDuration
         suppressManualResizeNotifications(for: (animated ? duration : 0) + max(layoutLockDelay, 0.25))
+        if focusActiveWindow {
+            markExpectedFocusedWindow(
+                for: activeWindow(),
+                duration: (animated ? duration : 0) + max(layoutLockDelay, 0.25) + 0.75
+            )
+            suppressFocusedWindowAdoption(for: (animated ? duration : 0) + max(layoutLockDelay, 0.25))
+        }
         if animated, duration > 0, let previousState {
             animateLayout(
                 from: previousState,
                 to: targetState,
                 viewport: viewport,
                 focusActiveWindow: focusActiveWindow,
+                prefocusActiveWindow: prefocusActiveWindow,
                 duration: duration
             )
             return
@@ -2210,21 +2409,22 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return min(max(Int(round(cameraY / viewport.height)), 0), workspaces.count - 1)
     }
 
-    private func applyLayout(_ layout: [LayoutItem], focusActiveWindow: Bool) {
-        for item in layout where !item.visible {
-            setWindowAlpha(0, for: item.window.windowID)
-        }
-
+    private func applyLayout(
+        _ layout: [LayoutItem],
+        focusActiveWindow: Bool,
+        verifyFocus: Bool = true,
+        focusDelay: TimeInterval = 0
+    ) {
         if focusActiveWindow, let activeWindow = self.activeWindow() {
+            if let activeItem = layout.first(where: { $0.window === activeWindow }) {
+                setAXFrame(activeItem.frame, for: activeWindow.element)
+                setWindowAlpha(1, for: activeWindow.windowID)
+            }
+
             let inactiveVisible = layout.filter { $0.visible && $0.window !== activeWindow }
             for item in inactiveVisible {
                 setAXFrame(item.frame, for: item.window.element)
                 setWindowAlpha(1, for: item.window.windowID)
-            }
-
-            if let activeItem = layout.first(where: { $0.window === activeWindow }) {
-                setAXFrame(activeItem.frame, for: activeWindow.element)
-                setWindowAlpha(1, for: activeWindow.windowID)
             }
         } else {
             for item in layout where item.visible {
@@ -2239,7 +2439,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         if focusActiveWindow, let activeWindow = self.activeWindow() {
-            focus(activeWindow)
+            requestFocus(activeWindow, verify: verifyFocus, delay: focusDelay)
         }
     }
 
@@ -2590,9 +2790,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         to targetState: LayoutState,
         viewport: CGRect,
         focusActiveWindow: Bool,
+        prefocusActiveWindow: Bool,
         duration: TimeInterval
     ) {
         stopAnimation(clearPresentation: false)
+        let generation = nextAnimationGeneration()
         isApplyingLayout = true
 
         let startLayout = layoutItems(viewport: viewport, state: previousState, parkHidden: false)
@@ -2618,6 +2820,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 window: window,
                 startFrame: startFrame,
                 endFrame: endFrame,
+                startsVisible: startByWindow[id]?.visible ?? false,
+                endsVisible: targetByWindow[id]?.visible ?? false,
                 participates: participates,
                 sizeStable: sizeStable
             )
@@ -2631,15 +2835,23 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return
         }
 
-        for motion in motions {
-            setWindowAlpha(motion.participates ? 1 : 0, for: motion.window.windowID)
+        for motion in motions where motion.participates {
+            applyFrame(motion.startFrame, to: motion)
+        }
+
+        primeAnimationVisibility(for: motions)
+        if prefocusActiveWindow, focusActiveWindow, let activeWindow = self.activeWindow() {
+            focus(activeWindow, verify: false, reveal: false)
         }
 
         let startedAt = CFAbsoluteTimeGetCurrent()
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(16), leeway: .milliseconds(2))
+        timer.schedule(deadline: .now() + .milliseconds(16), repeating: .milliseconds(16), leeway: .milliseconds(2))
         timer.setEventHandler { [weak self] in
             guard let self else {
+                return
+            }
+            guard generation == animationGeneration else {
                 return
             }
 
@@ -2658,7 +2870,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             if isFinalFrame {
                 animationTimer?.cancel()
                 animationTimer = nil
-                applyLayout(finalLayout, focusActiveWindow: focusActiveWindow)
+                animationGeneration &+= 1
+                applyLayout(
+                    finalLayout,
+                    focusActiveWindow: focusActiveWindow,
+                    focusDelay: focusActiveWindow ? 0.035 : 0
+                )
                 restoreFloatingVisibility()
                 presentationFrames.removeAll()
                 releaseLayoutLock()
@@ -2689,22 +2906,54 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             let frame = interpolate(from: motion.startFrame, to: motion.endFrame, progress: progress)
             nextPresentationFrames[id] = frame
 
-            if motion.sizeStable {
-                setAXPosition(frame.origin, for: motion.window.element)
-            } else {
-                setAXFrame(frame, for: motion.window.element)
-            }
+            applyFrame(frame, to: motion)
+            applyAnimationVisibility(for: motion, progress: progress)
         }
 
         presentationFrames = nextPresentationFrames
     }
 
+    private func primeAnimationVisibility(for motions: [WindowMotion]) {
+        for motion in motions {
+            let alpha: Float = motion.participates && motion.startsVisible ? 1 : 0
+            setWindowAlpha(alpha, for: motion.window.windowID)
+        }
+    }
+
+    private func applyAnimationVisibility(for motion: WindowMotion, progress: CGFloat) {
+        guard motion.participates else {
+            return
+        }
+
+        if motion.startsVisible {
+            setWindowAlpha(1, for: motion.window.windowID)
+            return
+        }
+
+        let shouldReveal = motion.endsVisible && progress >= 0.08
+        setWindowAlpha(shouldReveal ? 1 : 0, for: motion.window.windowID)
+    }
+
+    private func applyFrame(_ frame: CGRect, to motion: WindowMotion) {
+        if motion.sizeStable {
+            setAXPosition(frame.origin, for: motion.window.element)
+        } else {
+            setAXFrame(frame, for: motion.window.element)
+        }
+    }
+
     private func stopAnimation(clearPresentation: Bool) {
+        animationGeneration &+= 1
         animationTimer?.cancel()
         animationTimer = nil
         if clearPresentation {
             presentationFrames.removeAll()
         }
+    }
+
+    private func nextAnimationGeneration() -> UInt64 {
+        animationGeneration &+= 1
+        return animationGeneration
     }
 
     private func releaseLayoutLock(after delay: TimeInterval = 0.08) {
@@ -2973,13 +3222,160 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return insetViewport(viewport, by: outerGap)
     }
 
-    private func focus(_ window: ManagedWindow) {
-        setWindowAlpha(1, for: window.windowID)
+    private func requestFocus(_ window: ManagedWindow, verify: Bool, delay: TimeInterval) {
+        focusRequestGeneration &+= 1
+        let generation = focusRequestGeneration
+        let windowID = ObjectIdentifier(window)
+
+        guard delay > 0 else {
+            focus(window, verify: verify)
+            return
+        }
+
+        suppressFocusedWindowAdoption(for: delay + 0.35)
+        markExpectedFocusedWindow(for: window, duration: delay + 1.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self,
+                  generation == focusRequestGeneration,
+                  let active = activeWindow(),
+                  ObjectIdentifier(active) == windowID,
+                  animationTimer == nil
+            else {
+                return
+            }
+
+            focus(active, verify: verify)
+        }
+    }
+
+    private func focus(_ window: ManagedWindow, verify: Bool = true, reveal: Bool = true) {
+        focusRequestGeneration &+= 1
+        suppressFocusedWindowAdoption(for: 0.25)
+        markExpectedFocusedWindow(for: window, duration: 1.0)
+        if reveal {
+            setWindowAlpha(1, for: window.windowID)
+        }
+        let appElement = AXUIElementCreateApplication(window.pid)
+        AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, window.element)
+        AXUIElementSetAttributeValue(window.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
         if let app = NSRunningApplication(processIdentifier: window.pid) {
             app.activate(options: [.activateIgnoringOtherApps])
         }
+        AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, window.element)
         AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
         AXUIElementSetAttributeValue(window.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        if verify {
+            scheduleFocusVerification(for: window)
+        }
+    }
+
+    private func scheduleFocusVerification(for window: ManagedWindow) {
+        focusVerificationGeneration &+= 1
+        let generation = focusVerificationGeneration
+        let windowID = ObjectIdentifier(window)
+        for delay in [0.02, 0.08, 0.18, 0.36] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.verifyFocusedWindow(windowID: windowID, generation: generation)
+            }
+        }
+    }
+
+    private func verifyFocusedWindow(windowID: ObjectIdentifier, generation: UInt64) {
+        guard generation == focusVerificationGeneration,
+              let window = activeWindow(),
+              ObjectIdentifier(window) == windowID,
+              animationTimer == nil
+        else {
+            return
+        }
+
+        let focusIsCorrect = isSystemFocused(window)
+        let frameIsCorrect = activeWindowFrameMatchesLayout(window)
+        guard focusIsCorrect, frameIsCorrect else {
+            debugLog("reapplying active layout focusOK=\(focusIsCorrect) frameOK=\(frameIsCorrect)")
+            reapplyCurrentLayout(focusActiveWindow: true, verifyFocus: false)
+            return
+        }
+
+        settleExpectedFocusedWindow(if: window)
+    }
+
+    private func activeWindowFrameMatchesLayout(_ window: ManagedWindow) -> Bool {
+        guard let expectedItem = currentLayoutItem(for: window), expectedItem.visible else {
+            return true
+        }
+        guard let actualFrame = axFrame(window.element) else {
+            return true
+        }
+
+        return framesApproximatelyEqual(actualFrame, expectedItem.frame, tolerance: 2)
+    }
+
+    private func currentLayoutItem(for window: ManagedWindow) -> LayoutItem? {
+        let viewport = currentViewport()
+        let layout = layoutItems(viewport: viewport, state: captureLayoutState(), parkHidden: true)
+        return layout.first { $0.window === window }
+    }
+
+    private func framesApproximatelyEqual(_ left: CGRect, _ right: CGRect, tolerance: CGFloat) -> Bool {
+        abs(left.minX - right.minX) <= tolerance
+            && abs(left.minY - right.minY) <= tolerance
+            && abs(left.width - right.width) <= tolerance
+            && abs(left.height - right.height) <= tolerance
+    }
+
+    private func reapplyCurrentLayout(focusActiveWindow: Bool, verifyFocus: Bool) {
+        let viewport = currentViewport()
+        let layout = layoutItems(viewport: viewport, state: captureLayoutState(), parkHidden: true)
+        applyLayout(layout, focusActiveWindow: focusActiveWindow, verifyFocus: verifyFocus)
+        restoreFloatingVisibility()
+    }
+
+    private func confirmExpectedFocusedWindowIfNeeded(_ window: ManagedWindow) -> Bool {
+        guard isSystemFocused(window) else {
+            return false
+        }
+
+        if activeWindowFrameMatchesLayout(window) {
+            settleExpectedFocusedWindow(if: window)
+            return true
+        }
+
+        return false
+    }
+
+    private func reconcileExpectedFocusChange(pid: pid_t) -> Bool {
+        guard let expectedID = expectedFocusedWindowID(),
+              let expectedWindow = activeWindow(),
+              ObjectIdentifier(expectedWindow) == expectedID
+        else {
+            return false
+        }
+
+        guard !isApplyingLayout, animationTimer == nil else {
+            debugLog("ignoring focus drift during column animation")
+            return true
+        }
+
+        if pid == expectedWindow.pid, confirmExpectedFocusedWindowIfNeeded(expectedWindow) {
+            return true
+        }
+
+        debugLog("ignoring focus drift while targeting \(expectedWindow.appName)")
+        focus(expectedWindow, verify: false)
+        return true
+    }
+
+    private func isSystemFocused(_ window: ManagedWindow) -> Bool {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == window.pid,
+              let app = NSRunningApplication(processIdentifier: window.pid),
+              let focused = focusedWindow(for: app)
+        else {
+            return false
+        }
+
+        return sameWindow(window.element, focused)
     }
 
     private func activeWindow() -> ManagedWindow? {
@@ -3352,7 +3748,15 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     @discardableResult
-    private func adoptFocusedWindow(pid: pid_t?, applyLayout: Bool = true) -> Bool {
+    private func adoptFocusedWindow(
+        pid: pid_t?,
+        applyLayout: Bool = true,
+        respectFocusSuppression: Bool = false
+    ) -> Bool {
+        if respectFocusSuppression, shouldSuppressFocusedWindowAdoption {
+            return false
+        }
+
         guard let pid else {
             return false
         }
@@ -3429,8 +3833,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         case kAXFocusedWindowChangedNotification:
             var pid: pid_t = 0
             AXUIElementGetPid(element, &pid)
+            guard !reconcileExpectedFocusChange(pid: pid) else {
+                return
+            }
+            guard !shouldSuppressFocusedWindowAdoption else {
+                return
+            }
             rescanWindows(adoptFocused: false)
-            adoptFocusedWindow(pid: pid)
+            adoptFocusedWindow(pid: pid, respectFocusSuppression: true)
         case kAXCreatedNotification, kAXUIElementDestroyedNotification:
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
                 self?.rescanWindows(adoptFocused: true)
@@ -3526,15 +3936,20 @@ private func eventTapCallback(
     _ event: CGEvent,
     _ refcon: UnsafeMutableRawPointer?
 ) -> Unmanaged<CGEvent>? {
-    guard type == .keyDown || type == .mouseMoved else {
-        return Unmanaged.passUnretained(event)
-    }
-
     guard let refcon else {
         return Unmanaged.passUnretained(event)
     }
 
     let app = Unmanaged<Scrollini>.fromOpaque(refcon).takeUnretainedValue()
+    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+        app.reenableEventTap()
+        return nil
+    }
+
+    guard type == .keyDown || type == .mouseMoved else {
+        return Unmanaged.passUnretained(event)
+    }
+
     if type == .mouseMoved {
         app.handleMouseMoved(event)
         return Unmanaged.passUnretained(event)

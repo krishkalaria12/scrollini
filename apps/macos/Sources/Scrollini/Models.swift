@@ -103,6 +103,8 @@ struct WindowMotion {
     var window: ManagedWindow
     var startFrame: CGRect
     var endFrame: CGRect
+    var startsVisible: Bool
+    var endsVisible: Bool
     var participates: Bool
     var sizeStable: Bool
 }
