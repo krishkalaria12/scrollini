@@ -13,7 +13,7 @@ struct ScrolliniMenuSnapshot {
 }
 
 enum ScrolliniMenuMetrics {
-    static let width: CGFloat = 320
+    static let width: CGFloat = 260
     static let horizontalPadding: CGFloat = 14
     static let verticalPadding: CGFloat = 6
 }
