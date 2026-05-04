@@ -45,6 +45,8 @@ terminal app itself to get those permissions.
 - Tracks `Cmd+Tab`, app launches, app exits, manual window resizes, and focused
   windows so the model follows macOS instead of fighting it.
 - Supports app rules for tiled, floating, and ignored windows.
+- Adds a graphical menu bar status item with workspace/window status, settings
+  shortcuts, layout reapply, and safe quit.
 - Hot-reloads config changes without restarting, keeping the previous config if
   a saved file cannot be parsed.
 - Persists workspace, column order, manual widths, and focused window across
@@ -94,6 +96,9 @@ scrollini loads the first config file it can read:
 The loaded config file is watched for changes. Saving valid JSON reloads
 keybindings, rules, layout settings, animations, and trackpad settings in place.
 If a save cannot be parsed, scrollini keeps running with the previous config.
+The menu bar item can open or reveal the loaded settings file, reveal the saved
+layout state file, reload settings, reapply the layout, and quit while restoring
+tiled windows.
 
 The repo includes a full default config. A compact version looks like this:
 
