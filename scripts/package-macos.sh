@@ -143,6 +143,8 @@ cat > "$app_dir/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+codesign --force --deep --sign - "$app_dir"
+
 ln -s /Applications "$volume_root/Applications"
 hdiutil create \
   -volname "$app_name $version" \
