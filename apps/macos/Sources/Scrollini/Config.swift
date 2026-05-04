@@ -42,6 +42,12 @@ enum TrackpadNavigationSnap: String, Codable {
     case none
 }
 
+struct LoadedScrolliniConfig {
+    var config: ScrolliniConfig
+    var sourceURL: URL?
+    var sourceModificationDate: Date?
+}
+
 struct ScrolliniConfig: Codable {
     var defaultWidthRatio: CGFloat
     var presetWidthRatios: [CGFloat]?
@@ -50,6 +56,7 @@ struct ScrolliniConfig: Codable {
     var hoverFocusAnimationMS: Int?
     var trackpadSettleAnimationMS: Int?
     var moveColumnAnimationMS: Int?
+    var widthAnimationMS: Int?
     var animationCurve: AnimationCurve?
     var hoverToFocus: Bool?
     var hoverFocusDelayMS: Int?
@@ -92,6 +99,7 @@ struct ScrolliniConfig: Codable {
         hoverFocusAnimationMS: 240,
         trackpadSettleAnimationMS: 240,
         moveColumnAnimationMS: 240,
+        widthAnimationMS: 280,
         animationCurve: .smooth,
         hoverToFocus: true,
         hoverFocusDelayMS: 120,
@@ -172,6 +180,10 @@ struct ScrolliniConfig: Codable {
     ]
 
     static func load() -> ScrolliniConfig {
+        loadWithMetadata().config
+    }
+
+    static func loadWithMetadata(logLoaded: Bool = true, logErrors: Bool = true) -> LoadedScrolliniConfig {
         let candidates = configCandidates()
         let decoder = JSONDecoder()
 
@@ -181,44 +193,65 @@ struct ScrolliniConfig: Codable {
             }
 
             do {
-                var config = try decoder.decode(ScrolliniConfig.self, from: data)
-                config.defaultWidthRatio = config.defaultWidthRatio.clampedWidthRatio
-                config.presetWidthRatios = normalizeWidthPresets(config.presetWidthRatios)
-                config.animationDurationMS = config.animationDurationMS.map { min(max($0, 0), 500) }
-                config.keyboardAnimationMS = config.keyboardAnimationMS.map { min(max($0, 0), 500) }
-                config.hoverFocusAnimationMS = config.hoverFocusAnimationMS.map { min(max($0, 0), 500) }
-                config.trackpadSettleAnimationMS = config.trackpadSettleAnimationMS.map { min(max($0, 0), 500) }
-                config.moveColumnAnimationMS = config.moveColumnAnimationMS.map { min(max($0, 0), 500) }
-                config.hoverFocusDelayMS = config.hoverFocusDelayMS.map { min(max($0, 0), 1000) }
-                config.hoverFocusMaxScrollRatio = config.hoverFocusMaxScrollRatio.map { min(max($0, 0), 2) }
-                config.hoverFocusRequiresVisibleRatio = config.hoverFocusRequiresVisibleRatio.map { min(max($0, 0), 2) }
-                config.hoverFocusEdgeTriggerWidth = config.hoverFocusEdgeTriggerWidth.map { min(max($0, 0), 96) }
-                config.hoverFocusAfterTrackpadMS = config.hoverFocusAfterTrackpadMS.map { min(max($0, 0), 2000) }
-                config.innerGap = config.innerGap.map { min(max($0, 0), 96) }
-                config.outerGap = config.outerGap.map { min(max($0, 0), 96) }
-                config.parkedSliverWidth = config.parkedSliverWidth.map { min(max($0, 0), 32) }
-                config.trackpadNavigationFingers = config.trackpadNavigationFingers.map { min(max($0, 2), 5) }
-                config.trackpadNavigationSensitivity = config.trackpadNavigationSensitivity.map { min(max($0, 0.1), 20) }
-                config.trackpadNavigationDeceleration = config.trackpadNavigationDeceleration.map { min(max($0, 1), 30) }
-                config.trackpadNavigationHoverSuppressionMS = config.trackpadNavigationHoverSuppressionMS.map { min(max($0, 0), 2000) }
-                config.trackpadNavigationMomentumMinVelocity = config.trackpadNavigationMomentumMinVelocity.map { min(max($0, 0), 5000) }
-                config.trackpadNavigationVelocityGain = config.trackpadNavigationVelocityGain.map { min(max($0, 0), 5) }
-                config.trackpadNavigationSettleAnimationMS = config.trackpadNavigationSettleAnimationMS.map { min(max($0, 0), 500) }
-                config.rescanIntervalMS = config.rescanIntervalMS.map { min(max($0, 100), 5000) }
-                config.rules = config.rules.map { rule in
-                    var rule = rule
-                    rule.widthRatio = rule.widthRatio.map(\.clampedWidthRatio)
-                    rule.workspace = rule.workspace.map { min(max($0, 1), 99) }
-                    return rule
+                let config = normalize(try decoder.decode(ScrolliniConfig.self, from: data))
+                if logLoaded {
+                    print("scrollini: loaded config \(url.path)")
                 }
-                print("scrollini: loaded config \(url.path)")
-                return config
+                return LoadedScrolliniConfig(
+                    config: config,
+                    sourceURL: url,
+                    sourceModificationDate: modificationDate(for: url)
+                )
             } catch {
-                fputs("scrollini: failed to parse config \(url.path): \(error)\n", stderr)
+                if logErrors {
+                    fputs("scrollini: failed to parse config \(url.path): \(error)\n", stderr)
+                }
             }
         }
 
-        return .fallback
+        return LoadedScrolliniConfig(config: .fallback, sourceURL: nil, sourceModificationDate: nil)
+    }
+
+    static func modificationDate(for url: URL) -> Date? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return nil
+        }
+        return attributes[.modificationDate] as? Date
+    }
+
+    private static func normalize(_ loadedConfig: ScrolliniConfig) -> ScrolliniConfig {
+        var config = loadedConfig
+        config.defaultWidthRatio = config.defaultWidthRatio.clampedWidthRatio
+        config.presetWidthRatios = normalizeWidthPresets(config.presetWidthRatios)
+        config.animationDurationMS = config.animationDurationMS.map { min(max($0, 0), 500) }
+        config.keyboardAnimationMS = config.keyboardAnimationMS.map { min(max($0, 0), 500) }
+        config.hoverFocusAnimationMS = config.hoverFocusAnimationMS.map { min(max($0, 0), 500) }
+        config.trackpadSettleAnimationMS = config.trackpadSettleAnimationMS.map { min(max($0, 0), 500) }
+        config.moveColumnAnimationMS = config.moveColumnAnimationMS.map { min(max($0, 0), 500) }
+        config.widthAnimationMS = config.widthAnimationMS.map { min(max($0, 0), 500) }
+        config.hoverFocusDelayMS = config.hoverFocusDelayMS.map { min(max($0, 0), 1000) }
+        config.hoverFocusMaxScrollRatio = config.hoverFocusMaxScrollRatio.map { min(max($0, 0), 2) }
+        config.hoverFocusRequiresVisibleRatio = config.hoverFocusRequiresVisibleRatio.map { min(max($0, 0), 2) }
+        config.hoverFocusEdgeTriggerWidth = config.hoverFocusEdgeTriggerWidth.map { min(max($0, 0), 96) }
+        config.hoverFocusAfterTrackpadMS = config.hoverFocusAfterTrackpadMS.map { min(max($0, 0), 2000) }
+        config.innerGap = config.innerGap.map { min(max($0, 0), 96) }
+        config.outerGap = config.outerGap.map { min(max($0, 0), 96) }
+        config.parkedSliverWidth = config.parkedSliverWidth.map { min(max($0, 0), 32) }
+        config.trackpadNavigationFingers = config.trackpadNavigationFingers.map { min(max($0, 2), 5) }
+        config.trackpadNavigationSensitivity = config.trackpadNavigationSensitivity.map { min(max($0, 0.1), 20) }
+        config.trackpadNavigationDeceleration = config.trackpadNavigationDeceleration.map { min(max($0, 1), 30) }
+        config.trackpadNavigationHoverSuppressionMS = config.trackpadNavigationHoverSuppressionMS.map { min(max($0, 0), 2000) }
+        config.trackpadNavigationMomentumMinVelocity = config.trackpadNavigationMomentumMinVelocity.map { min(max($0, 0), 5000) }
+        config.trackpadNavigationVelocityGain = config.trackpadNavigationVelocityGain.map { min(max($0, 0), 5) }
+        config.trackpadNavigationSettleAnimationMS = config.trackpadNavigationSettleAnimationMS.map { min(max($0, 0), 500) }
+        config.rescanIntervalMS = config.rescanIntervalMS.map { min(max($0, 100), 5000) }
+        config.rules = config.rules.map { rule in
+            var rule = rule
+            rule.widthRatio = rule.widthRatio.map(\.clampedWidthRatio)
+            rule.workspace = rule.workspace.map { min(max($0, 1), 99) }
+            return rule
+        }
+        return config
     }
 
     private static func normalizeWidthPresets(_ presets: [CGFloat]?) -> [CGFloat]? {
@@ -262,6 +295,7 @@ struct ScrolliniConfig: Codable {
         case hoverFocusAnimationMS = "hover_focus_animation_ms"
         case trackpadSettleAnimationMS = "trackpad_settle_animation_ms"
         case moveColumnAnimationMS = "move_column_animation_ms"
+        case widthAnimationMS = "width_animation_ms"
         case animationCurve = "animation_curve"
         case hoverToFocus = "hover_to_focus"
         case hoverFocusDelayMS = "hover_focus_delay_ms"

@@ -6,6 +6,7 @@
   "hover_focus_animation_ms": 240,
   "trackpad_settle_animation_ms": 240,
   "move_column_animation_ms": 240,
+  "width_animation_ms": 280,
   "animation_curve": "smooth",
   "hover_to_focus": true,
   "hover_focus_delay_ms": 120,

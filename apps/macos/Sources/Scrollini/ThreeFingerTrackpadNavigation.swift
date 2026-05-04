@@ -151,6 +151,19 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         return true
     }
 
+    func stop() {
+        lock.lock()
+        resetGesture()
+        lock.unlock()
+
+        if Self.active === self {
+            Self.active = nil
+        }
+        devices.removeAll()
+        deviceList = nil
+        framework = nil
+    }
+
     fileprivate static func handleContacts(touches: UnsafeMutableRawPointer?, count: Int) {
         active?.handleContacts(touches: touches, count: count)
     }

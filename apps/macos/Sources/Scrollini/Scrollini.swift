@@ -5,7 +5,17 @@ import Darwin
 import Foundation
 
 final class Scrollini: NSObject, @unchecked Sendable {
-    private let config = ScrolliniConfig.load()
+    private struct TrackpadNavigationSettings: Equatable {
+        var enabled: Bool
+        var fingers: Int
+        var invertX: Bool
+        var invertY: Bool
+    }
+
+    private var loadedConfig = ScrolliniConfig.loadWithMetadata()
+    private var config: ScrolliniConfig {
+        loadedConfig.config
+    }
     private var workspaces: [Workspace] = [Workspace()]
     private var floatingWindows: [ManagedWindow] = []
     private var activeWorkspace: Int = 0
@@ -53,9 +63,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
         installEventTap()
         installTrackpadNavigation()
         rescanWindows(adoptFocused: true)
-        rescanTimer = Timer.scheduledTimer(withTimeInterval: rescanInterval, repeats: true) { [weak self] _ in
-            self?.rescanWindows(adoptFocused: false)
-        }
+        scheduleRescanTimer()
 
         print("scrollini: running")
         print("scrollini: loaded \(commandByKeybinding.count) keybindings")
@@ -71,6 +79,64 @@ final class Scrollini: NSObject, @unchecked Sendable {
             print("scrollini: SkyLight alpha support unavailable; parked windows will remain as edge slivers")
         }
         RunLoop.main.run()
+    }
+
+    private func scheduleRescanTimer() {
+        rescanTimer?.invalidate()
+        rescanTimer = Timer.scheduledTimer(withTimeInterval: rescanInterval, repeats: true) { [weak self] _ in
+            self?.handlePeriodicTick()
+        }
+    }
+
+    private func handlePeriodicTick() {
+        guard !reloadConfigIfNeeded() else {
+            return
+        }
+        rescanWindows(adoptFocused: false)
+    }
+
+    @discardableResult
+    private func reloadConfigIfNeeded() -> Bool {
+        let previousSourceURL = loadedConfig.sourceURL
+        let previousModificationDate = loadedConfig.sourceModificationDate
+
+        if let previousSourceURL {
+            let currentModificationDate = ScrolliniConfig.modificationDate(for: previousSourceURL)
+            guard currentModificationDate != previousModificationDate else {
+                return false
+            }
+
+            loadedConfig.sourceModificationDate = currentModificationDate
+        }
+
+        let previousRescanInterval = rescanInterval
+        let previousRestoreOnExit = restoreOnExit
+        let previousTrackpadSettings = trackpadNavigationSettings
+        let reloaded = ScrolliniConfig.loadWithMetadata(logLoaded: false)
+
+        guard reloaded.sourceURL != nil else {
+            if previousSourceURL != nil {
+                fputs("scrollini: config reload skipped; keeping previous config\n", stderr)
+            }
+            return false
+        }
+
+        loadedConfig = reloaded
+        configureInput()
+
+        if trackpadNavigationSettings != previousTrackpadSettings {
+            restartTrackpadNavigation()
+        }
+        if rescanInterval != previousRescanInterval {
+            scheduleRescanTimer()
+        }
+        updateCleanupWatcher(previousRestoreOnExit: previousRestoreOnExit)
+
+        let sourcePath = loadedConfig.sourceURL?.path ?? "fallback"
+        print("scrollini: reloaded config \(sourcePath), \(commandByKeybinding.count) keybindings")
+        rescanWindows(adoptFocused: false)
+        projectLayout(focusActiveWindow: false)
+        return true
     }
 
     private func requestAccessibilityPermission() -> Bool {
@@ -187,6 +253,27 @@ final class Scrollini: NSObject, @unchecked Sendable {
         guard navigation.start() else { return }
 
         trackpadNavigation = navigation
+    }
+
+    private func restartTrackpadNavigation() {
+        trackpadNavigation?.stop()
+        trackpadNavigation = nil
+        clearTrackpadCamera()
+        installTrackpadNavigation()
+    }
+
+    private func updateCleanupWatcher(previousRestoreOnExit: Bool) {
+        guard restoreOnExit != previousRestoreOnExit else {
+            return
+        }
+
+        if restoreOnExit {
+            startCleanupWatcher()
+        } else {
+            cleanupWatcher?.terminate()
+            cleanupWatcher = nil
+            try? FileManager.default.removeItem(at: restoreStateURL)
+        }
     }
 
     private func configureInput() {
@@ -806,6 +893,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
         rescanWindows(adoptFocused: false)
         let previousState = captureLayoutState()
         var animated = false
+        var frameAnimated = false
         var duration = keyboardAnimationDuration
 
         switch command {
@@ -880,46 +968,79 @@ final class Scrollini: NSObject, @unchecked Sendable {
         case .moveColumnToWorkspaceUp:
             moveActiveColumnToWorkspace(relativeOffset: -1)
         case .cycleWidthPresetBackward:
-            guard cycleActiveWidthPreset(direction: -1) else {
+            duration = widthAnimationDuration
+            guard performAnimatedWidthChange(from: previousState, { cycleActiveWidthPreset(direction: -1) }) else {
                 return
             }
+            animated = true
+            frameAnimated = true
         case .cycleWidthPresetForward:
-            guard cycleActiveWidthPreset(direction: 1) else {
+            duration = widthAnimationDuration
+            guard performAnimatedWidthChange(from: previousState, { cycleActiveWidthPreset(direction: 1) }) else {
                 return
             }
+            animated = true
+            frameAnimated = true
         case .nudgeWidthNarrower:
-            guard nudgeActiveWidth(by: -0.1) else {
+            duration = widthAnimationDuration
+            guard performAnimatedWidthChange(from: previousState, { nudgeActiveWidth(by: -0.1) }) else {
                 return
             }
+            animated = true
+            frameAnimated = true
         case .nudgeWidthWider:
-            guard nudgeActiveWidth(by: 0.1) else {
+            duration = widthAnimationDuration
+            guard performAnimatedWidthChange(from: previousState, { nudgeActiveWidth(by: 0.1) }) else {
                 return
             }
+            animated = true
+            frameAnimated = true
         case .cycleAllWidthPresetsBackward:
-            guard cycleAllWidthPresets(direction: -1) else {
+            duration = widthAnimationDuration
+            guard performAnimatedWidthChange(from: previousState, { cycleAllWidthPresets(direction: -1) }) else {
                 return
             }
+            animated = true
+            frameAnimated = true
         case .cycleAllWidthPresetsForward:
-            guard cycleAllWidthPresets(direction: 1) else {
+            duration = widthAnimationDuration
+            guard performAnimatedWidthChange(from: previousState, { cycleAllWidthPresets(direction: 1) }) else {
                 return
             }
+            animated = true
+            frameAnimated = true
         case .nudgeAllWidthsNarrower:
-            guard nudgeAllWidths(by: -0.1) else {
+            duration = widthAnimationDuration
+            guard performAnimatedWidthChange(from: previousState, { nudgeAllWidths(by: -0.1) }) else {
                 return
             }
+            animated = true
+            frameAnimated = true
         case .nudgeAllWidthsWider:
-            guard nudgeAllWidths(by: 0.1) else {
+            duration = widthAnimationDuration
+            guard performAnimatedWidthChange(from: previousState, { nudgeAllWidths(by: 0.1) }) else {
                 return
             }
+            animated = true
+            frameAnimated = true
         }
 
         let newState = captureLayoutState()
         projectLayout(
             focusActiveWindow: true,
-            animated: animated && previousState != newState,
+            animated: animated && (previousState != newState || frameAnimated),
             from: previousState,
             animationDuration: duration
         )
+    }
+
+    private func performAnimatedWidthChange(from state: LayoutState, _ change: () -> Bool) -> Bool {
+        seedPresentationFrames(from: state)
+        guard change() else {
+            presentationFrames.removeAll()
+            return false
+        }
+        return true
     }
 
     private func focusWorkspace(_ oneBasedIndex: Int) {
@@ -1074,7 +1195,6 @@ final class Scrollini: NSObject, @unchecked Sendable {
         for workspace in workspaces {
             workspace.scrollOffset = nil
         }
-        presentationFrames.removeAll()
         return true
     }
 
@@ -1092,7 +1212,6 @@ final class Scrollini: NSObject, @unchecked Sendable {
         }
 
         workspace.scrollOffset = nil
-        presentationFrames.removeAll()
         return true
     }
 
@@ -1109,7 +1228,6 @@ final class Scrollini: NSObject, @unchecked Sendable {
         for workspace in workspaces {
             workspace.scrollOffset = nil
         }
-        presentationFrames.removeAll()
         return true
     }
 
@@ -1487,6 +1605,14 @@ final class Scrollini: NSObject, @unchecked Sendable {
         return TimeInterval(config.moveColumnAnimationMS ?? fallback) / 1000
     }
 
+    private var widthAnimationDuration: TimeInterval {
+        let fallback = config.keyboardAnimationMS
+            ?? config.animationDurationMS
+            ?? ScrolliniConfig.fallback.widthAnimationMS
+            ?? 280
+        return TimeInterval(config.widthAnimationMS ?? fallback) / 1000
+    }
+
     private var animationCurve: AnimationCurve {
         config.animationCurve ?? ScrolliniConfig.fallback.animationCurve ?? .smooth
     }
@@ -1599,6 +1725,15 @@ final class Scrollini: NSObject, @unchecked Sendable {
 
     private var trackpadNavigationInvertY: Bool {
         config.trackpadNavigationInvertY ?? ScrolliniConfig.fallback.trackpadNavigationInvertY ?? false
+    }
+
+    private var trackpadNavigationSettings: TrackpadNavigationSettings {
+        TrackpadNavigationSettings(
+            enabled: trackpadNavigationEnabled,
+            fingers: trackpadNavigationFingers,
+            invertX: trackpadNavigationInvertX,
+            invertY: trackpadNavigationInvertY
+        )
     }
 
     private var widthPresetRatios: [CGFloat] {
@@ -2037,13 +2172,19 @@ final class Scrollini: NSObject, @unchecked Sendable {
                 return
             }
 
-            let elapsed = CFAbsoluteTimeGetCurrent() - startedAt
+            let now = CFAbsoluteTimeGetCurrent()
+            let elapsed = now - startedAt
             let linearProgress = min(max(elapsed / duration, 0), 1)
             let easedProgress = softSettleCurve(CGFloat(linearProgress))
-            applyAnimationFrame(motions, progress: easedProgress, viewport: viewport)
+            let isFinalFrame = linearProgress >= 1
+            applyAnimationFrame(
+                motions,
+                progress: easedProgress,
+                viewport: viewport
+            )
             restoreFloatingVisibility()
 
-            if linearProgress >= 1 {
+            if isFinalFrame {
                 animationTimer?.cancel()
                 animationTimer = nil
                 applyLayout(finalLayout, focusActiveWindow: focusActiveWindow)
@@ -2061,7 +2202,11 @@ final class Scrollini: NSObject, @unchecked Sendable {
         Dictionary(uniqueKeysWithValues: layout.map { (ObjectIdentifier($0.window), $0) })
     }
 
-    private func applyAnimationFrame(_ motions: [WindowMotion], progress: CGFloat, viewport: CGRect) {
+    private func applyAnimationFrame(
+        _ motions: [WindowMotion],
+        progress: CGFloat,
+        viewport: CGRect
+    ) {
         var nextPresentationFrames: [ObjectIdentifier: CGRect] = [:]
 
         for motion in motions {

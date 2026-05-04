@@ -45,6 +45,8 @@ terminal app itself to get those permissions.
 - Tracks `Cmd+Tab`, app launches, app exits, manual window resizes, and focused
   windows so the model follows macOS instead of fighting it.
 - Supports app rules for tiled, floating, and ignored windows.
+- Hot-reloads config changes without restarting, keeping the previous config if
+  a saved file cannot be parsed.
 - Parks off-workspace windows near the side edge, with optional SkyLight alpha
   hiding when those private symbols are available.
 - Restores tiled windows on normal exit and starts a small cleanup watcher for
@@ -87,6 +89,10 @@ scrollini loads the first config file it can read:
 - `$XDG_CONFIG_HOME/scrollini/config.json`
 - `~/.config/scrollini/config.json`
 
+The loaded config file is watched for changes. Saving valid JSON reloads
+keybindings, rules, layout settings, animations, and trackpad settings in place.
+If a save cannot be parsed, scrollini keeps running with the previous config.
+
 The repo includes a full default config. A compact version looks like this:
 
 ```json
@@ -98,6 +104,7 @@ The repo includes a full default config. A compact version looks like this:
   "hover_focus_animation_ms": 240,
   "trackpad_settle_animation_ms": 240,
   "move_column_animation_ms": 240,
+  "width_animation_ms": 280,
   "animation_curve": "smooth",
   "hover_to_focus": true,
   "hover_focus_delay_ms": 120,
