@@ -77,6 +77,8 @@
   "trackpad_navigation_invert_y": false,
   "rescan_interval_ms": 1000,
   "restore_on_exit": true,
+  "persist_layout": true,
+  "state_path": null,
   "hide_method": "skylight_alpha",
   "debug_logging": false,
   "rules": [

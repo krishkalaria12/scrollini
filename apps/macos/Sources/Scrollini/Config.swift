@@ -87,6 +87,8 @@ struct ScrolliniConfig: Codable {
     var trackpadNavigationInvertY: Bool?
     var rescanIntervalMS: Int?
     var restoreOnExit: Bool?
+    var persistLayout: Bool?
+    var statePath: String?
     var hideMethod: HideMethod?
     var debugLogging: Bool?
     var rules: [WindowRule]
@@ -130,6 +132,8 @@ struct ScrolliniConfig: Codable {
         trackpadNavigationInvertY: false,
         rescanIntervalMS: 1000,
         restoreOnExit: true,
+        persistLayout: true,
+        statePath: nil,
         hideMethod: .skyLightAlpha,
         debugLogging: false,
         rules: [
@@ -326,6 +330,8 @@ struct ScrolliniConfig: Codable {
         case trackpadNavigationInvertY = "trackpad_navigation_invert_y"
         case rescanIntervalMS = "rescan_interval_ms"
         case restoreOnExit = "restore_on_exit"
+        case persistLayout = "persist_layout"
+        case statePath = "state_path"
         case hideMethod = "hide_method"
         case debugLogging = "debug_logging"
         case rules

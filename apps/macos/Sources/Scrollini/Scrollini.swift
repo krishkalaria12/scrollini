@@ -42,7 +42,10 @@ final class Scrollini: NSObject, @unchecked Sendable {
     private var trackpadMomentumLastFrameAt: CFAbsoluteTime = 0
     private var manualResizeEndTimer: DispatchSourceTimer?
     private var manualResizeElement: AXUIElement?
+    private var manualResizeSuppressedUntil: CFAbsoluteTime = 0
     private var presentationFrames: [ObjectIdentifier: CGRect] = [:]
+    private lazy var persistentLayoutSnapshot = readPersistentLayoutSnapshot()
+    private var needsPersistentLayoutRestore = true
     private var signalSources: [DispatchSourceSignal] = []
     private let restoreStateURL = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("scrollini-\(ProcessInfo.processInfo.processIdentifier).restore.json")
@@ -1363,28 +1366,37 @@ final class Scrollini: NSObject, @unchecked Sendable {
                 if shouldFloat != isFloating {
                     removeWindow(existing)
                     if shouldFloat {
-                        insertFloatingWindow(existing)
+                        insertFloatingWindow(existing, applyLayout: false)
                     } else {
-                        insertNewWindow(existing)
+                        insertNewWindow(existing, applyLayout: false, focusNewWindow: false)
                     }
                     changed = true
                 }
             } else {
                 if behavior(for: found) == .float {
-                    insertFloatingWindow(found)
+                    insertFloatingWindow(found, applyLayout: false)
                 } else {
-                    insertNewWindow(found)
+                    insertNewWindow(found, applyLayout: false, focusNewWindow: false)
                 }
                 changed = true
             }
         }
 
+        let restoredPersistentLayout = applyPersistentLayoutSnapshotIfNeeded()
         ensureTrailingEmptyWorkspace()
 
         if adoptFocused {
-            adoptFocusedWindow(pid: NSWorkspace.shared.frontmostApplication?.processIdentifier)
-        } else if changed {
-            projectLayout(focusActiveWindow: false)
+            let adoptedFocusedWindow = adoptFocusedWindow(
+                pid: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                applyLayout: false
+            )
+            let restoredPersistentFocus = adoptedFocusedWindow ? false : restorePersistentFocusedWindow()
+            projectLayout(
+                focusActiveWindow: restoredPersistentFocus,
+                layoutLockDelay: restoredPersistentLayout ? 0.4 : 0.08
+            )
+        } else if changed || restoredPersistentLayout {
+            projectLayout(focusActiveWindow: false, layoutLockDelay: restoredPersistentLayout ? 0.4 : 0.08)
         }
     }
 
@@ -1462,7 +1474,7 @@ final class Scrollini: NSObject, @unchecked Sendable {
         allWindows().contains { sameWindow($0.element, element) }
     }
 
-    private func insertNewWindow(_ window: ManagedWindow) {
+    private func insertNewWindow(_ window: ManagedWindow, applyLayout: Bool = true, focusNewWindow: Bool = true) {
         let workspace = targetWorkspace(for: window)
         workspace.clampFocus()
 
@@ -1475,7 +1487,9 @@ final class Scrollini: NSObject, @unchecked Sendable {
             setActiveWorkspace(workspaceIndex, rememberPrevious: false)
         }
         ensureTrailingEmptyWorkspace()
-        projectLayout(focusActiveWindow: true)
+        if applyLayout {
+            projectLayout(focusActiveWindow: focusNewWindow)
+        }
     }
 
     private func targetWorkspace(for window: ManagedWindow) -> Workspace {
@@ -1509,11 +1523,13 @@ final class Scrollini: NSObject, @unchecked Sendable {
         }
     }
 
-    private func insertFloatingWindow(_ window: ManagedWindow) {
+    private func insertFloatingWindow(_ window: ManagedWindow, applyLayout: Bool = true) {
         if !floatingWindows.contains(where: { $0 === window }) {
             floatingWindows.append(window)
         }
-        projectLayout(focusActiveWindow: false)
+        if applyLayout {
+            projectLayout(focusActiveWindow: false)
+        }
     }
 
     private func removeWindow(_ window: ManagedWindow) {
@@ -1765,10 +1781,12 @@ final class Scrollini: NSObject, @unchecked Sendable {
     ) {
         let viewport = currentViewport()
         writeRestoreSnapshot(viewport: viewport)
+        writePersistentLayoutSnapshot()
 
         let targetState = captureLayoutState()
         debugLog("layout workspace=\(targetState.activeWorkspace + 1) tiled=\(tiledWindows().count) floating=\(floatingWindows.count) animated=\(animated)")
         let duration = animationDuration ?? self.animationDuration
+        suppressManualResizeNotifications(for: (animated ? duration : 0) + max(layoutLockDelay, 0.25))
         if animated, duration > 0, let previousState {
             animateLayout(
                 from: previousState,
@@ -2527,6 +2545,178 @@ final class Scrollini: NSObject, @unchecked Sendable {
         workspaces.flatMap(\.columns)
     }
 
+    private var persistLayoutEnabled: Bool {
+        config.persistLayout ?? ScrolliniConfig.fallback.persistLayout ?? true
+    }
+
+    private var persistentLayoutStateURL: URL {
+        if let statePath = config.statePath, !statePath.isEmpty {
+            return URL(fileURLWithPath: NSString(string: statePath).expandingTildeInPath)
+        }
+
+        let stateHome = ProcessInfo.processInfo.environment["XDG_STATE_HOME"]
+            .map { URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath) }
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".local")
+                .appendingPathComponent("state")
+        return stateHome
+            .appendingPathComponent("scrollini", isDirectory: true)
+            .appendingPathComponent("layout.json")
+    }
+
+    private func readPersistentLayoutSnapshot() -> PersistentLayoutSnapshot? {
+        guard persistLayoutEnabled,
+              let data = try? Data(contentsOf: persistentLayoutStateURL),
+              let snapshot = try? JSONDecoder().decode(PersistentLayoutSnapshot.self, from: data),
+              (1...2).contains(snapshot.version)
+        else {
+            return nil
+        }
+        return snapshot
+    }
+
+    private func writePersistentLayoutSnapshot() {
+        guard persistLayoutEnabled else {
+            try? FileManager.default.removeItem(at: persistentLayoutStateURL)
+            return
+        }
+
+        let states = workspaces.enumerated().flatMap { workspaceIndex, workspace in
+            workspace.columns.enumerated().map { columnIndex, window in
+                PersistentWindowState(
+                    identity: persistentIdentity(for: window),
+                    workspace: workspaceIndex,
+                    column: columnIndex,
+                    manualWidthRatio: window.manualWidthRatio
+                )
+            }
+        }
+        guard !states.isEmpty else {
+            try? FileManager.default.removeItem(at: persistentLayoutStateURL)
+            return
+        }
+
+        let snapshot = PersistentLayoutSnapshot(
+            version: 2,
+            activeWorkspace: min(max(activeWorkspace, 0), max(workspaces.count - 1, 0)),
+            activeColumns: workspaces.map(\.activeColumn),
+            scrollOffsets: workspaces.map(\.scrollOffset),
+            focusedWindow: activeWindow().map(persistentIdentity(for:)),
+            windows: states
+        )
+
+        do {
+            let url = persistentLayoutStateURL
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let data = try JSONEncoder().encode(snapshot)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            debugLog("failed to write persistent layout: \(error)")
+        }
+    }
+
+    @discardableResult
+    private func applyPersistentLayoutSnapshotIfNeeded() -> Bool {
+        guard needsPersistentLayoutRestore else {
+            return false
+        }
+
+        guard let snapshot = persistentLayoutSnapshot else {
+            needsPersistentLayoutRestore = false
+            return false
+        }
+
+        var usedSnapshotIndices = Set<Int>()
+        var placements: [(state: PersistentWindowState, window: ManagedWindow)] = []
+        for window in tiledWindows() {
+            guard let state = persistentWindowState(for: window, in: snapshot, used: &usedSnapshotIndices) else {
+                continue
+            }
+            window.manualWidthRatio = state.manualWidthRatio
+            placements.append((state, window))
+        }
+
+        guard !placements.isEmpty else {
+            return false
+        }
+        needsPersistentLayoutRestore = false
+
+        let placedIDs = Set(placements.map { ObjectIdentifier($0.window) })
+        let workspaceCount = max(
+            workspaces.count,
+            (placements.map(\.state.workspace).max() ?? 0) + 1,
+            snapshot.activeWorkspace + 1,
+            1
+        )
+        let nextWorkspaces = (0..<workspaceCount).map { _ in Workspace() }
+
+        for (workspaceIndex, workspace) in workspaces.enumerated() {
+            let targetWorkspace = nextWorkspaces[min(workspaceIndex, nextWorkspaces.count - 1)]
+            for window in workspace.columns where !placedIDs.contains(ObjectIdentifier(window)) {
+                targetWorkspace.columns.append(window)
+            }
+        }
+
+        let sortedPlacements = placements.sorted {
+            if $0.state.workspace != $1.state.workspace {
+                return $0.state.workspace < $1.state.workspace
+            }
+            return $0.state.column < $1.state.column
+        }
+        for placement in sortedPlacements {
+            let workspaceIndex = min(max(placement.state.workspace, 0), nextWorkspaces.count - 1)
+            let workspace = nextWorkspaces[workspaceIndex]
+            workspace.columns.insert(placement.window, at: min(max(placement.state.column, 0), workspace.columns.count))
+        }
+
+        workspaces = nextWorkspaces
+        activeWorkspace = min(max(snapshot.activeWorkspace, 0), workspaces.count - 1)
+        for (index, workspace) in workspaces.enumerated() {
+            if snapshot.activeColumns.indices.contains(index) {
+                workspace.activeColumn = snapshot.activeColumns[index]
+            }
+            if let scrollOffsets = snapshot.scrollOffsets, scrollOffsets.indices.contains(index) {
+                workspace.scrollOffset = scrollOffsets[index]
+            } else {
+                workspace.scrollOffset = nil
+            }
+            workspace.clampFocus()
+        }
+        return true
+    }
+
+    private func restorePersistentFocusedWindow() -> Bool {
+        guard let focusedWindow = persistentLayoutSnapshot?.focusedWindow,
+              let location = tiledWindowLocation(matching: focusedWindow)
+        else {
+            return false
+        }
+
+        setActiveWorkspace(location.workspaceIndex)
+        location.workspace.activeColumn = location.columnIndex
+        return true
+    }
+
+    private func persistentWindowState(
+        for window: ManagedWindow,
+        in snapshot: PersistentLayoutSnapshot,
+        used: inout Set<Int>
+    ) -> PersistentWindowState? {
+        let identity = persistentIdentity(for: window)
+        for (index, state) in snapshot.windows.enumerated() where !used.contains(index) && state.identity == identity {
+            used.insert(index)
+            return state
+        }
+        return nil
+    }
+
+    private func persistentIdentity(for window: ManagedWindow) -> PersistentWindowIdentity {
+        PersistentWindowIdentity(bundleID: window.bundleID, appName: window.appName, title: window.title)
+    }
+
     private func restoreManagedWindowsForExit() {
         guard restoreOnExit else {
             return
@@ -2575,6 +2765,17 @@ final class Scrollini: NSObject, @unchecked Sendable {
     ) -> (workspaceIndex: Int, workspace: Workspace, columnIndex: Int, window: ManagedWindow)? {
         for (workspaceIndex, workspace) in workspaces.enumerated() {
             if let columnIndex = workspace.columns.firstIndex(where: { sameWindow($0.element, element) }) {
+                return (workspaceIndex, workspace, columnIndex, workspace.columns[columnIndex])
+            }
+        }
+        return nil
+    }
+
+    private func tiledWindowLocation(
+        matching identity: PersistentWindowIdentity
+    ) -> (workspaceIndex: Int, workspace: Workspace, columnIndex: Int, window: ManagedWindow)? {
+        for (workspaceIndex, workspace) in workspaces.enumerated() {
+            if let columnIndex = workspace.columns.firstIndex(where: { persistentIdentity(for: $0) == identity }) {
                 return (workspaceIndex, workspace, columnIndex, workspace.columns[columnIndex])
             }
         }
@@ -2644,6 +2845,17 @@ final class Scrollini: NSObject, @unchecked Sendable {
         scheduleManualResizeEnd(for: element)
     }
 
+    private var manualResizeNotificationsSuppressed: Bool {
+        CFAbsoluteTimeGetCurrent() < manualResizeSuppressedUntil
+    }
+
+    private func suppressManualResizeNotifications(for duration: TimeInterval) {
+        guard duration > 0 else {
+            return
+        }
+        manualResizeSuppressedUntil = max(manualResizeSuppressedUntil, CFAbsoluteTimeGetCurrent() + duration)
+    }
+
     private func scheduleManualResizeEnd(for element: AXUIElement) {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + .milliseconds(140), leeway: .milliseconds(20))
@@ -2686,32 +2898,43 @@ final class Scrollini: NSObject, @unchecked Sendable {
         return abs(frameRatio - widthRatio(for: window)) >= 0.005
     }
 
-    private func adoptFocusedWindow(pid: pid_t?) {
+    @discardableResult
+    private func adoptFocusedWindow(pid: pid_t?, applyLayout: Bool = true) -> Bool {
         guard let pid else {
-            return
+            return false
         }
 
         let appElement = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &value)
         guard error == .success, let focused = value else {
-            return
+            return false
         }
 
         let focusedElement = focused as! AXUIElement
         if floatingWindows.contains(where: { sameWindow($0.element, focusedElement) }) {
-            projectLayout(focusActiveWindow: false)
-            return
+            if applyLayout {
+                projectLayout(focusActiveWindow: false)
+            }
+            return true
         }
 
         if let loc = location(of: focusedElement) {
             clearTrackpadCamera()
-            setActiveWorkspace(loc.workspace)
             let workspace = workspaces[loc.workspace]
+            let changedFocus = activeWorkspace != loc.workspace || workspace.activeColumn != loc.column
+            setActiveWorkspace(loc.workspace)
             workspace.activeColumn = loc.column
-            workspace.scrollOffset = nil
-            projectLayout(focusActiveWindow: false)
+            if changedFocus {
+                workspace.scrollOffset = nil
+            }
+            if applyLayout {
+                projectLayout(focusActiveWindow: false)
+            }
+            return true
         }
+
+        return false
     }
 
     private func startObservingApp(pid: pid_t) {
@@ -2758,6 +2981,9 @@ final class Scrollini: NSObject, @unchecked Sendable {
                 restoreFloatingVisibility()
                 return
             }
+            guard !manualResizeNotificationsSuppressed else {
+                return
+            }
 
             if manualResizeElement != nil {
                 guard isManualResizeElement(element) else {
@@ -2768,6 +2994,10 @@ final class Scrollini: NSObject, @unchecked Sendable {
                 beginOrContinueManualResize(for: element)
             }
         case kAXWindowMovedNotification:
+            if manualResizeNotificationsSuppressed, tiledWindow(for: element) != nil {
+                return
+            }
+
             if manualResizeElement != nil {
                 guard isManualResizeElement(element) else {
                     return

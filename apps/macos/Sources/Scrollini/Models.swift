@@ -46,6 +46,28 @@ struct RestoreSnapshot: Codable {
     var viewport: RectSnapshot
 }
 
+struct PersistentLayoutSnapshot: Codable {
+    var version: Int
+    var activeWorkspace: Int
+    var activeColumns: [Int]
+    var scrollOffsets: [CGFloat?]?
+    var focusedWindow: PersistentWindowIdentity?
+    var windows: [PersistentWindowState]
+}
+
+struct PersistentWindowState: Codable {
+    var identity: PersistentWindowIdentity
+    var workspace: Int
+    var column: Int
+    var manualWidthRatio: CGFloat?
+}
+
+struct PersistentWindowIdentity: Codable, Hashable {
+    var bundleID: String?
+    var appName: String
+    var title: String
+}
+
 struct RectSnapshot: Codable {
     var x: Double
     var y: Double

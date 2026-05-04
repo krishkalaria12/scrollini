@@ -47,6 +47,8 @@ terminal app itself to get those permissions.
 - Supports app rules for tiled, floating, and ignored windows.
 - Hot-reloads config changes without restarting, keeping the previous config if
   a saved file cannot be parsed.
+- Persists workspace, column order, manual widths, and focused window across
+  restarts.
 - Parks off-workspace windows near the side edge, with optional SkyLight alpha
   hiding when those private symbols are available.
 - Restores tiled windows on normal exit and starts a small cleanup watcher for
@@ -140,6 +142,8 @@ The repo includes a full default config. A compact version looks like this:
   "trackpad_navigation_invert_y": false,
   "rescan_interval_ms": 1000,
   "restore_on_exit": true,
+  "persist_layout": true,
+  "state_path": null,
   "hide_method": "skylight_alpha",
   "debug_logging": false,
   "rules": [
@@ -172,6 +176,11 @@ Rules can match on `bundle_id`, `app_name`, or `title_contains`. Use
 for visible untiled windows, and `width_ratio` to override an app's default
 column width. Rules can also set `workspace`, `open_position`,
 `trackpad_navigation`, and `hover_to_focus` for matching windows.
+
+With `persist_layout` enabled, scrollini writes a local layout snapshot to
+`$XDG_STATE_HOME/scrollini/layout.json` or `~/.local/state/scrollini/layout.json`. Set
+`state_path` to override that location. The snapshot uses app names, bundle IDs,
+and window titles to match windows after restart.
 
 ## Development
 
