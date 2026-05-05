@@ -41,6 +41,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var pendingColumnNavigationTimer: DispatchSourceTimer?
     private var rescanTimer: Timer?
     private var isApplyingLayout = false
+    private var layoutLockGeneration: UInt64 = 0
     private var animationTimer: DispatchSourceTimer?
     private var animationGeneration: UInt64 = 0
     private var focusedWindowAdoptionSuppressedUntil: CFAbsoluteTime = 0
@@ -48,6 +49,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var expectedFocusedWindowUntil: CFAbsoluteTime = 0
     private var focusRequestGeneration: UInt64 = 0
     private var focusVerificationGeneration: UInt64 = 0
+    private var layoutVerificationGeneration: UInt64 = 0
     private var hoverFocusTimer: DispatchSourceTimer?
     private var hoverFocusTarget: ObjectIdentifier?
     private var hoverFocusRequiresRearm = false
@@ -83,6 +85,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var statusItem: NSStatusItem?
     private let normalWindowLevel = Int32(CGWindowLevelForKey(.normalWindow))
     private let floatingWindowLevel = Int32(CGWindowLevelForKey(.floatingWindow))
+    private let frameTimerInterval: DispatchTimeInterval = .milliseconds(16)
+    private let frameTimerLeeway: DispatchTimeInterval = .milliseconds(1)
 
     func start() {
         guard requestAccessibilityPermission() else {
@@ -418,6 +422,28 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
     }
 
+    private func makeMainTimer(
+        deadline: DispatchTime,
+        repeating interval: DispatchTimeInterval? = nil,
+        leeway: DispatchTimeInterval = .milliseconds(2),
+        handler: @escaping () -> Void
+    ) -> DispatchSourceTimer {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        if let interval {
+            timer.schedule(deadline: deadline, repeating: interval, leeway: leeway)
+        } else {
+            timer.schedule(deadline: deadline, leeway: leeway)
+        }
+        timer.setEventHandler(handler: handler)
+        timer.resume()
+        return timer
+    }
+
+    private func cancelTimer(_ timer: inout DispatchSourceTimer?) {
+        timer?.cancel()
+        timer = nil
+    }
+
     private func scheduleRescanTimer() {
         rescanTimer?.invalidate()
         rescanTimer = Timer.scheduledTimer(withTimeInterval: rescanInterval, repeats: true) { [weak self] _ in
@@ -676,18 +702,13 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return
         }
 
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .milliseconds(12), leeway: .milliseconds(2))
-        timer.setEventHandler { [weak self] in
+        pendingColumnNavigationTimer = makeMainTimer(deadline: .now() + .milliseconds(12)) { [weak self] in
             self?.flushPendingColumnNavigation()
         }
-        pendingColumnNavigationTimer = timer
-        timer.resume()
     }
 
     private func flushPendingColumnNavigation() {
-        pendingColumnNavigationTimer?.cancel()
-        pendingColumnNavigationTimer = nil
+        cancelTimer(&pendingColumnNavigationTimer)
 
         let delta = pendingColumnNavigationDelta
         pendingColumnNavigationDelta = 0
@@ -1018,8 +1039,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         stopTrackpadMomentum()
         stopAnimation(clearPresentation: false)
         rescanWindows(adoptFocused: false)
-        trackpadPendingCameraDelta = .zero
-        trackpadLatestCameraVelocity = .zero
+        resetTrackpadCameraMotion(clearCameraY: false)
         seedTrackpadCamera(viewport: currentViewport())
         startTrackpadRenderLoop()
     }
@@ -1045,16 +1065,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         flushTrackpadCameraFrame()
         stopTrackpadRenderLoop()
         let viewport = currentViewport()
-        trackpadCameraVelocity = trackpadCameraVelocity(from: velocity, viewport: viewport)
-        if abs(trackpadCameraVelocity.x) < abs(trackpadLatestCameraVelocity.x) {
-            trackpadCameraVelocity.x = trackpadLatestCameraVelocity.x
-        }
-        if abs(trackpadCameraVelocity.y) < abs(trackpadLatestCameraVelocity.y) {
-            trackpadCameraVelocity.y = trackpadLatestCameraVelocity.y
-        }
-        guard abs(trackpadCameraVelocity.x) >= trackpadNavigationMomentumMinVelocity
-            || abs(trackpadCameraVelocity.y) >= trackpadNavigationMomentumMinVelocity
-        else {
+        trackpadCameraVelocity = strongestTrackpadCameraVelocity(
+            endingVelocity: trackpadCameraVelocity(from: velocity, viewport: viewport)
+        )
+
+        guard hasTrackpadMomentumVelocity else {
             settleTrackpadCamera(focusActiveWindow: true)
             return
         }
@@ -1084,6 +1099,35 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return 1 + extra
     }
 
+    private var hasPendingTrackpadCameraDelta: Bool {
+        abs(trackpadPendingCameraDelta.width) >= 0.5 || abs(trackpadPendingCameraDelta.height) >= 0.5
+    }
+
+    private var hasTrackpadMomentumVelocity: Bool {
+        abs(trackpadCameraVelocity.x) >= trackpadNavigationMomentumMinVelocity
+            || abs(trackpadCameraVelocity.y) >= trackpadNavigationMomentumMinVelocity
+    }
+
+    private func strongestTrackpadCameraVelocity(endingVelocity: CGPoint) -> CGPoint {
+        CGPoint(
+            x: abs(endingVelocity.x) >= abs(trackpadLatestCameraVelocity.x)
+                ? endingVelocity.x
+                : trackpadLatestCameraVelocity.x,
+            y: abs(endingVelocity.y) >= abs(trackpadLatestCameraVelocity.y)
+                ? endingVelocity.y
+                : trackpadLatestCameraVelocity.y
+        )
+    }
+
+    private func resetTrackpadCameraMotion(clearCameraY: Bool) {
+        trackpadPendingCameraDelta = .zero
+        trackpadLatestCameraVelocity = .zero
+        trackpadCameraVelocity = .zero
+        if clearCameraY {
+            trackpadCameraY = nil
+        }
+    }
+
     private func suppressHoverFocusAfterTrackpadMovement() {
         hoverFocusSuppressedUntil = CFAbsoluteTimeGetCurrent() + hoverFocusAfterTrackpad
         cancelHoverFocus()
@@ -1103,13 +1147,13 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         stopTrackpadMomentum()
         trackpadMomentumLastFrameAt = CFAbsoluteTimeGetCurrent()
 
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .milliseconds(16), repeating: .milliseconds(16), leeway: .milliseconds(2))
-        timer.setEventHandler { [weak self] in
+        trackpadMomentumTimer = makeMainTimer(
+            deadline: .now(),
+            repeating: frameTimerInterval,
+            leeway: frameTimerLeeway
+        ) { [weak self] in
             self?.stepTrackpadMomentum()
         }
-        trackpadMomentumTimer = timer
-        timer.resume()
     }
 
     private func startTrackpadRenderLoop() {
@@ -1117,22 +1161,21 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return
         }
 
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .milliseconds(16), repeating: .milliseconds(16), leeway: .milliseconds(2))
-        timer.setEventHandler { [weak self] in
+        trackpadRenderTimer = makeMainTimer(
+            deadline: .now(),
+            repeating: frameTimerInterval,
+            leeway: frameTimerLeeway
+        ) { [weak self] in
             self?.flushTrackpadCameraFrame()
         }
-        trackpadRenderTimer = timer
-        timer.resume()
     }
 
     private func stopTrackpadRenderLoop() {
-        trackpadRenderTimer?.cancel()
-        trackpadRenderTimer = nil
+        cancelTimer(&trackpadRenderTimer)
     }
 
     private func flushTrackpadCameraFrame() {
-        guard abs(trackpadPendingCameraDelta.width) >= 0.5 || abs(trackpadPendingCameraDelta.height) >= 0.5 else {
+        guard hasPendingTrackpadCameraDelta else {
             return
         }
 
@@ -1175,17 +1218,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
         projectLayout(focusActiveWindow: false, layoutLockDelay: 0, snapshotTiming: .deferred)
 
-        if abs(trackpadCameraVelocity.x) < trackpadNavigationMomentumMinVelocity,
-           abs(trackpadCameraVelocity.y) < trackpadNavigationMomentumMinVelocity
-        {
+        if !hasTrackpadMomentumVelocity {
             stopTrackpadMomentum()
             settleTrackpadCamera(focusActiveWindow: true)
         }
     }
 
     private func stopTrackpadMomentum() {
-        trackpadMomentumTimer?.cancel()
-        trackpadMomentumTimer = nil
+        cancelTimer(&trackpadMomentumTimer)
     }
 
     @discardableResult
@@ -1205,7 +1245,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 let nextX = min(max(currentX + delta.width, 0), maxX)
                 workspace.scrollOffset = nextX
                 clampedX = abs(nextX - (currentX + delta.width)) > 0.5
+            } else {
+                clampedX = abs(delta.width) > 0.5
             }
+        } else {
+            clampedX = abs(delta.width) > 0.5
         }
 
         let clampedY = abs(nextY - (currentY + delta.height)) > 0.5
@@ -1214,7 +1258,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     private func settleTrackpadCamera(focusActiveWindow: Bool) {
         guard !workspaces.isEmpty else {
-            trackpadCameraY = nil
+            resetTrackpadCameraMotion(clearCameraY: true)
             return
         }
 
@@ -1242,12 +1286,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             }
         }
 
-        if trackpadNavigationSnap != .none {
-            trackpadCameraY = nil
-        }
-        trackpadCameraVelocity = .zero
-        trackpadLatestCameraVelocity = .zero
-        trackpadPendingCameraDelta = .zero
+        resetTrackpadCameraMotion(clearCameraY: trackpadNavigationSnap != .none)
         hoverFocusRequiresRearm = true
         suppressHoverFocusAfterTrackpadMovement()
 
@@ -1264,25 +1303,21 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private func clearTrackpadCamera() {
         stopTrackpadRenderLoop()
         stopTrackpadMomentum()
-        trackpadPendingCameraDelta = .zero
-        trackpadLatestCameraVelocity = .zero
-        trackpadCameraY = nil
-        trackpadCameraVelocity = .zero
+        resetTrackpadCameraMotion(clearCameraY: true)
     }
 
     private func freezeTrackpadCameraForTransition() {
         stopTrackpadRenderLoop()
         stopTrackpadMomentum()
 
-        if abs(trackpadPendingCameraDelta.width) >= 0.5 || abs(trackpadPendingCameraDelta.height) >= 0.5 {
+        if hasPendingTrackpadCameraDelta {
             let viewport = currentViewport()
             seedTrackpadCamera(viewport: viewport)
             _ = applyTrackpadCameraDelta(trackpadPendingCameraDelta, viewport: viewport)
             trackpadPendingCameraDelta = .zero
         }
 
-        trackpadLatestCameraVelocity = .zero
-        trackpadCameraVelocity = .zero
+        resetTrackpadCameraMotion(clearCameraY: false)
     }
 
     private func performColumnNavigation(by delta: Int) {
@@ -1312,7 +1347,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         )
     }
 
-    private func perform(_ command: Command, animateWorkspace: Bool = false) {
+    private func perform(_ command: Command) {
         clearTrackpadCamera()
         cancelHoverFocus()
         hoverFocusRequiresRearm = false
@@ -1321,10 +1356,25 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         var animated = false
         var frameAnimated = false
         var duration = keyboardAnimationDuration
+        func runAnimatedChange(
+            duration changeDuration: TimeInterval,
+            frameChange: Bool = false,
+            _ change: () -> Bool
+        ) -> Bool {
+            duration = changeDuration
+            guard performAnimatedLayoutChange(from: previousState, change) else {
+                return false
+            }
+            animated = true
+            frameAnimated = frameAnimated || frameChange
+            return true
+        }
 
         switch command {
         case .focusWorkspace(let oneBasedIndex):
-            focusWorkspace(oneBasedIndex)
+            guard focusWorkspace(oneBasedIndex) else {
+                return
+            }
         case .focusPreviousWorkspace:
             guard focusPreviousWorkspace() else {
                 return
@@ -1334,13 +1384,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 return
             }
             activeWorkspaceObject()?.clampFocus()
-            animated = animateWorkspace
         case .workspaceUp:
             guard setActiveWorkspace(activeWorkspace - 1) else {
                 return
             }
             activeWorkspaceObject()?.clampFocus()
-            animated = animateWorkspace
         case .columnLeft:
             guard focusColumn(relativeOffset: -1) else {
                 return
@@ -1365,86 +1413,98 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             }
             animated = true
         case .moveColumnLeft:
-            duration = moveColumnAnimationDuration
-            seedPresentationFrames(from: previousState)
-            animated = moveActiveColumnHorizontally(by: -1)
+            guard runAnimatedChange(duration: moveColumnAnimationDuration, {
+                moveActiveColumnHorizontally(by: -1)
+            }) else {
+                return
+            }
         case .moveColumnRight:
-            duration = moveColumnAnimationDuration
-            seedPresentationFrames(from: previousState)
-            animated = moveActiveColumnHorizontally(by: 1)
+            guard runAnimatedChange(duration: moveColumnAnimationDuration, {
+                moveActiveColumnHorizontally(by: 1)
+            }) else {
+                return
+            }
         case .moveColumnToFirst:
-            duration = moveColumnAnimationDuration
-            seedPresentationFrames(from: previousState)
-            animated = moveActiveColumn(to: 0)
+            guard runAnimatedChange(duration: moveColumnAnimationDuration, {
+                moveActiveColumn(to: 0)
+            }) else {
+                return
+            }
         case .moveColumnToLast:
-            duration = moveColumnAnimationDuration
-            seedPresentationFrames(from: previousState)
             guard let workspace = activeWorkspaceObject() else {
                 return
             }
-            animated = moveActiveColumn(to: workspace.columns.count - 1)
+            guard runAnimatedChange(duration: moveColumnAnimationDuration, {
+                moveActiveColumn(to: workspace.columns.count - 1)
+            }) else {
+                return
+            }
         case .moveColumnToWorkspace(let oneBasedIndex):
-            moveActiveColumnToWorkspace(oneBasedIndex: oneBasedIndex)
+            guard runAnimatedChange(duration: moveColumnAnimationDuration, {
+                moveActiveColumnToWorkspace(oneBasedIndex: oneBasedIndex)
+            }) else {
+                return
+            }
         case .moveColumnToWorkspaceDown:
-            moveActiveColumnToWorkspace(relativeOffset: 1)
+            guard runAnimatedChange(duration: moveColumnAnimationDuration, {
+                moveActiveColumnToWorkspace(relativeOffset: 1)
+            }) else {
+                return
+            }
         case .moveColumnToWorkspaceUp:
-            moveActiveColumnToWorkspace(relativeOffset: -1)
+            guard runAnimatedChange(duration: moveColumnAnimationDuration, {
+                moveActiveColumnToWorkspace(relativeOffset: -1)
+            }) else {
+                return
+            }
         case .cycleWidthPresetBackward:
-            duration = widthAnimationDuration
-            guard performAnimatedWidthChange(from: previousState, { cycleActiveWidthPreset(direction: -1) }) else {
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                cycleActiveWidthPreset(direction: -1)
+            }) else {
                 return
             }
-            animated = true
-            frameAnimated = true
         case .cycleWidthPresetForward:
-            duration = widthAnimationDuration
-            guard performAnimatedWidthChange(from: previousState, { cycleActiveWidthPreset(direction: 1) }) else {
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                cycleActiveWidthPreset(direction: 1)
+            }) else {
                 return
             }
-            animated = true
-            frameAnimated = true
         case .nudgeWidthNarrower:
-            duration = widthAnimationDuration
-            guard performAnimatedWidthChange(from: previousState, { nudgeActiveWidth(by: -0.1) }) else {
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                nudgeActiveWidth(by: -0.1)
+            }) else {
                 return
             }
-            animated = true
-            frameAnimated = true
         case .nudgeWidthWider:
-            duration = widthAnimationDuration
-            guard performAnimatedWidthChange(from: previousState, { nudgeActiveWidth(by: 0.1) }) else {
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                nudgeActiveWidth(by: 0.1)
+            }) else {
                 return
             }
-            animated = true
-            frameAnimated = true
         case .cycleAllWidthPresetsBackward:
-            duration = widthAnimationDuration
-            guard performAnimatedWidthChange(from: previousState, { cycleAllWidthPresets(direction: -1) }) else {
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                cycleAllWidthPresets(direction: -1)
+            }) else {
                 return
             }
-            animated = true
-            frameAnimated = true
         case .cycleAllWidthPresetsForward:
-            duration = widthAnimationDuration
-            guard performAnimatedWidthChange(from: previousState, { cycleAllWidthPresets(direction: 1) }) else {
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                cycleAllWidthPresets(direction: 1)
+            }) else {
                 return
             }
-            animated = true
-            frameAnimated = true
         case .nudgeAllWidthsNarrower:
-            duration = widthAnimationDuration
-            guard performAnimatedWidthChange(from: previousState, { nudgeAllWidths(by: -0.1) }) else {
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                nudgeAllWidths(by: -0.1)
+            }) else {
                 return
             }
-            animated = true
-            frameAnimated = true
         case .nudgeAllWidthsWider:
-            duration = widthAnimationDuration
-            guard performAnimatedWidthChange(from: previousState, { nudgeAllWidths(by: 0.1) }) else {
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                nudgeAllWidths(by: 0.1)
+            }) else {
                 return
             }
-            animated = true
-            frameAnimated = true
         }
 
         let newState = captureLayoutState()
@@ -1456,7 +1516,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         )
     }
 
-    private func performAnimatedWidthChange(from state: LayoutState, _ change: () -> Bool) -> Bool {
+    private func performAnimatedLayoutChange(from state: LayoutState, _ change: () -> Bool) -> Bool {
+        // LayoutState stores focus and camera state, not pre-mutation window order or width.
         seedPresentationFrames(from: state)
         guard change() else {
             presentationFrames.removeAll()
@@ -1465,9 +1526,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return true
     }
 
-    private func focusWorkspace(_ oneBasedIndex: Int) {
+    private func focusWorkspace(_ oneBasedIndex: Int) -> Bool {
         guard !workspaces.isEmpty else {
-            return
+            return false
         }
 
         let requestedIndex = min(max(oneBasedIndex - 1, 0), workspaces.count - 1)
@@ -1475,8 +1536,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             ? previousWorkspaceIndex() ?? requestedIndex
             : requestedIndex
 
-        setActiveWorkspace(targetIndex)
+        guard setActiveWorkspace(targetIndex) else {
+            return false
+        }
         activeWorkspaceObject()?.clampFocus()
+        return true
     }
 
     private func focusPreviousWorkspace() -> Bool {
@@ -1526,6 +1590,10 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         let targetIndex = min(max(requestedIndex, 0), workspace.columns.count - 1)
+        guard targetIndex != workspace.activeColumn || workspace.scrollOffset != nil else {
+            return false
+        }
+
         workspace.activeColumn = targetIndex
         workspace.scrollOffset = nil
         return true
@@ -1592,9 +1660,6 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         let sourceIndex = workspace.activeColumn
         let targetIndex = min(max(requestedIndex, 0), workspace.columns.count - 1)
         guard sourceIndex != targetIndex else {
-            return false
-        }
-        guard workspace.columns.indices.contains(targetIndex) else {
             return false
         }
 
@@ -1822,20 +1887,18 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     ) {
         scheduledRescanAdoptFocused = scheduledRescanAdoptFocused || adoptFocused
         scheduledRescanProjectLayout = scheduledRescanProjectLayout || projectLayoutAfter
-        scheduledRescanTimer?.cancel()
+        cancelTimer(&scheduledRescanTimer)
 
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + delay, leeway: .milliseconds(25))
-        timer.setEventHandler { [weak self] in
+        scheduledRescanTimer = makeMainTimer(
+            deadline: .now() + delay,
+            leeway: .milliseconds(25)
+        ) { [weak self] in
             self?.runScheduledRescan()
         }
-        scheduledRescanTimer = timer
-        timer.resume()
     }
 
     private func runScheduledRescan() {
-        scheduledRescanTimer?.cancel()
-        scheduledRescanTimer = nil
+        cancelTimer(&scheduledRescanTimer)
 
         let adoptFocused = scheduledRescanAdoptFocused
         let projectLayoutAfter = scheduledRescanProjectLayout
@@ -1903,15 +1966,23 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         pruneAppliedLayoutCache()
 
         if adoptFocused {
-            let adoptedFocusedWindow = adoptFocusedWindow(
-                pid: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                applyLayout: false
-            )
-            let restoredPersistentFocus = adoptedFocusedWindow ? false : restorePersistentFocusedWindow()
-            projectLayout(
-                focusActiveWindow: restoredPersistentFocus,
-                layoutLockDelay: restoredPersistentLayout ? 0.4 : 0.08
-            )
+            let suppressFocusedAdoption = shouldSuppressFocusedWindowAdoption
+            let adoptedFocusedWindow = suppressFocusedAdoption
+                ? false
+                : adoptFocusedWindow(
+                    pid: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                    applyLayout: false,
+                    respectFocusSuppression: true
+                )
+            let restoredPersistentFocus = !suppressFocusedAdoption && !adoptedFocusedWindow
+                ? restorePersistentFocusedWindow()
+                : false
+            if changed || restoredPersistentLayout || adoptedFocusedWindow || restoredPersistentFocus {
+                projectLayout(
+                    focusActiveWindow: restoredPersistentFocus,
+                    layoutLockDelay: restoredPersistentLayout ? 0.4 : 0.08
+                )
+            }
         } else if changed || restoredPersistentLayout {
             projectLayout(focusActiveWindow: false, layoutLockDelay: restoredPersistentLayout ? 0.4 : 0.08)
         }
@@ -2087,18 +2158,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         if workspaces.count > 1 {
-            var index = workspaces.count - 2
-            while index >= 0 {
-                if index != activeWorkspace && workspaces[index].isEmpty {
-                    workspaces.remove(at: index)
-                    if activeWorkspace > index {
-                        activeWorkspace -= 1
-                    }
+            for index in stride(from: workspaces.count - 2, through: 0, by: -1) {
+                guard index != activeWorkspace, workspaces[index].isEmpty else {
+                    continue
                 }
-                if index == 0 {
-                    break
+                workspaces.remove(at: index)
+                if activeWorkspace > index {
+                    activeWorkspace -= 1
                 }
-                index -= 1
             }
         }
 
@@ -2122,7 +2189,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return keyboardAnimationDuration
         }
 
-        return min(keyboardAnimationDuration, max(keyboardAnimationDuration * 0.75, 0.12))
+        return min(keyboardAnimationDuration, max(keyboardAnimationDuration * 0.35, 0.07))
     }
 
     private var hoverFocusAnimationDuration: TimeInterval {
@@ -2361,7 +2428,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         snapshotTiming: LayoutSnapshotTiming = .immediate
     ) {
         let viewport = currentViewport()
-        writeLayoutSnapshots(viewport: viewport, timing: snapshotTiming)
+        writeLayoutSnapshots(viewport: viewport, timing: animated ? .deferred : snapshotTiming)
 
         let targetState = captureLayoutState()
         updateStatusItem()
@@ -2388,9 +2455,10 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         stopAnimation(clearPresentation: true)
-        isApplyingLayout = true
+        beginLayoutLock()
         let layout = layoutItems(viewport: viewport, state: targetState, parkHidden: true)
-        applyLayout(layout, focusActiveWindow: focusActiveWindow)
+        applyLayout(layout, focusActiveWindow: focusActiveWindow, forceFocusedFrame: focusActiveWindow)
+        scheduleActiveLayoutVerification(focusActiveWindow: focusActiveWindow)
         restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
         releaseLayoutLock(after: layoutLockDelay)
     }
@@ -2469,24 +2537,21 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         _ layout: [LayoutItem],
         focusActiveWindow: Bool,
         verifyFocus: Bool = true,
-        focusDelay: TimeInterval = 0
+        focusDelay: TimeInterval = 0,
+        forceFocusedFrame: Bool = false
     ) {
-        if focusActiveWindow, let activeWindow = self.activeWindow() {
-            if let activeItem = layout.first(where: { $0.window === activeWindow }) {
-                applyFrame(activeItem.frame, to: activeWindow)
-                setWindowAlpha(1, for: activeWindow.windowID)
-            }
+        let focusedWindow = focusActiveWindow ? activeWindow() : nil
+        if let focusedWindow, let focusedItem = layout.first(where: { $0.window === focusedWindow }) {
+            applyFrame(focusedItem.frame, to: focusedWindow, force: forceFocusedFrame)
+            setWindowAlpha(1, for: focusedWindow.windowID)
+        }
 
-            let inactiveVisible = layout.filter { $0.visible && $0.window !== activeWindow }
-            for item in inactiveVisible {
-                applyFrame(item.frame, to: item.window)
-                setWindowAlpha(1, for: item.window.windowID)
+        for item in layout where item.visible {
+            if let focusedWindow, item.window === focusedWindow {
+                continue
             }
-        } else {
-            for item in layout where item.visible {
-                applyFrame(item.frame, to: item.window)
-                setWindowAlpha(1, for: item.window.windowID)
-            }
+            applyFrame(item.frame, to: item.window)
+            setWindowAlpha(1, for: item.window.windowID)
         }
 
         for item in layout where !item.visible {
@@ -2494,8 +2559,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             setWindowAlpha(0, for: item.window.windowID)
         }
 
-        if focusActiveWindow, let activeWindow = self.activeWindow() {
-            requestFocus(activeWindow, verify: verifyFocus, delay: focusDelay)
+        if let focusedWindow {
+            requestFocus(focusedWindow, verify: verifyFocus, delay: focusDelay)
         }
     }
 
@@ -2868,21 +2933,19 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         cancelHoverFocus()
         hoverFocusTarget = id
 
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + hoverFocusDelay, leeway: .milliseconds(20))
-        timer.setEventHandler { [weak self, weak window] in
+        hoverFocusTimer = makeMainTimer(
+            deadline: .now() + hoverFocusDelay,
+            leeway: .milliseconds(20)
+        ) { [weak self, weak window] in
             guard let self, let window else {
                 return
             }
             performHoverFocus(window: window, workspaceIndex: workspaceIndex, columnIndex: columnIndex)
         }
-        hoverFocusTimer = timer
-        timer.resume()
     }
 
     private func performHoverFocus(window: ManagedWindow, workspaceIndex: Int, columnIndex: Int) {
-        hoverFocusTimer?.cancel()
-        hoverFocusTimer = nil
+        cancelTimer(&hoverFocusTimer)
         hoverFocusTarget = nil
 
         guard hoverFocusEnabled,
@@ -2917,8 +2980,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     private func cancelHoverFocus() {
-        hoverFocusTimer?.cancel()
-        hoverFocusTimer = nil
+        cancelTimer(&hoverFocusTimer)
         hoverFocusTarget = nil
     }
 
@@ -2945,7 +3007,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     ) {
         stopAnimation(clearPresentation: false)
         let generation = nextAnimationGeneration()
-        isApplyingLayout = true
+        beginLayoutLock()
 
         let startLayout = layoutItems(viewport: viewport, state: previousState, parkHidden: false)
         let targetProjectedLayout = layoutItems(viewport: viewport, state: targetState, parkHidden: false)
@@ -2978,7 +3040,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         guard !motions.isEmpty else {
-            applyLayout(finalLayout, focusActiveWindow: focusActiveWindow)
+            applyLayout(finalLayout, focusActiveWindow: focusActiveWindow, forceFocusedFrame: focusActiveWindow)
+            scheduleActiveLayoutVerification(focusActiveWindow: focusActiveWindow)
             restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
             presentationFrames.removeAll()
             releaseLayoutLock()
@@ -2988,6 +3051,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         for motion in motions where motion.participates {
             applyFrame(motion.startFrame, to: motion)
         }
+        presentationFrames = presentationFrames(for: motions, progress: 0)
 
         primeAnimationVisibility(for: motions)
         if prefocusActiveWindow, focusActiveWindow, let activeWindow = self.activeWindow() {
@@ -2995,9 +3059,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         let startedAt = CFAbsoluteTimeGetCurrent()
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .milliseconds(16), repeating: .milliseconds(16), leeway: .milliseconds(2))
-        timer.setEventHandler { [weak self] in
+        animationTimer = makeMainTimer(
+            deadline: .now() + frameTimerInterval,
+            repeating: frameTimerInterval,
+            leeway: frameTimerLeeway
+        ) { [weak self] in
             guard let self else {
                 return
             }
@@ -3018,26 +3084,36 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             restoreFloatingVisibility()
 
             if isFinalFrame {
-                animationTimer?.cancel()
-                animationTimer = nil
+                cancelTimer(&animationTimer)
                 animationGeneration &+= 1
                 applyLayout(
                     finalLayout,
                     focusActiveWindow: focusActiveWindow,
-                    focusDelay: focusActiveWindow ? 0.035 : 0
+                    focusDelay: focusActiveWindow ? 0.035 : 0,
+                    forceFocusedFrame: focusActiveWindow
                 )
+                scheduleActiveLayoutVerification(focusActiveWindow: focusActiveWindow)
                 restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
                 presentationFrames.removeAll()
                 releaseLayoutLock()
             }
         }
-
-        animationTimer = timer
-        timer.resume()
     }
 
     private func layoutByWindow(_ layout: [LayoutItem]) -> [ObjectIdentifier: LayoutItem] {
         Dictionary(uniqueKeysWithValues: layout.map { (ObjectIdentifier($0.window), $0) })
+    }
+
+    private func presentationFrames(for motions: [WindowMotion], progress: CGFloat) -> [ObjectIdentifier: CGRect] {
+        Dictionary(uniqueKeysWithValues: motions.compactMap { motion in
+            guard motion.participates else {
+                return nil
+            }
+            return (
+                ObjectIdentifier(motion.window),
+                interpolate(from: motion.startFrame, to: motion.endFrame, progress: progress)
+            )
+        })
     }
 
     private func applyAnimationFrame(
@@ -3045,22 +3121,17 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         progress: CGFloat,
         viewport: CGRect
     ) {
-        var nextPresentationFrames: [ObjectIdentifier: CGRect] = [:]
-
         for motion in motions {
-            let id = ObjectIdentifier(motion.window)
             guard motion.participates else {
                 continue
             }
 
             let frame = interpolate(from: motion.startFrame, to: motion.endFrame, progress: progress)
-            nextPresentationFrames[id] = frame
-
             applyFrame(frame, to: motion)
             applyAnimationVisibility(for: motion, progress: progress)
         }
 
-        presentationFrames = nextPresentationFrames
+        presentationFrames = presentationFrames(for: motions, progress: progress)
     }
 
     private func primeAnimationVisibility(for motions: [WindowMotion]) {
@@ -3103,7 +3174,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         let succeeded: Bool
-        if sizeStable,
+        if !force,
+           sizeStable,
            let previous = appliedFrames[id],
            abs(previous.width - frame.width) < 0.5,
            abs(previous.height - frame.height) < 0.5
@@ -3120,11 +3192,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     private func stopAnimation(clearPresentation: Bool) {
         animationGeneration &+= 1
-        animationTimer?.cancel()
-        animationTimer = nil
+        cancelTimer(&animationTimer)
         if clearPresentation {
             presentationFrames.removeAll()
         }
+        layoutLockGeneration &+= 1
+        isApplyingLayout = false
     }
 
     private func nextAnimationGeneration() -> UInt64 {
@@ -3132,14 +3205,25 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return animationGeneration
     }
 
+    private func beginLayoutLock() {
+        layoutLockGeneration &+= 1
+        isApplyingLayout = true
+    }
+
     private func releaseLayoutLock(after delay: TimeInterval = 0.08) {
+        let generation = layoutLockGeneration
         guard delay > 0 else {
-            isApplyingLayout = false
+            if generation == layoutLockGeneration {
+                isApplyingLayout = false
+            }
             return
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self, animationTimer == nil else {
+            guard let self,
+                  generation == layoutLockGeneration,
+                  animationTimer == nil
+            else {
                 return
             }
             isApplyingLayout = false
@@ -3489,6 +3573,57 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return framesApproximatelyEqual(actualFrame, expectedItem.frame, tolerance: 2)
     }
 
+    private func scheduleActiveLayoutVerification(focusActiveWindow: Bool) {
+        guard let window = activeWindow() else {
+            return
+        }
+
+        layoutVerificationGeneration &+= 1
+        let generation = layoutVerificationGeneration
+        let windowID = ObjectIdentifier(window)
+        for delay in [0.06, 0.16, 0.32] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.verifyActiveLayout(
+                    windowID: windowID,
+                    generation: generation,
+                    focusActiveWindow: focusActiveWindow
+                )
+            }
+        }
+    }
+
+    private func verifyActiveLayout(
+        windowID: ObjectIdentifier,
+        generation: UInt64,
+        focusActiveWindow: Bool
+    ) {
+        guard generation == layoutVerificationGeneration,
+              animationTimer == nil,
+              let window = activeWindow(),
+              ObjectIdentifier(window) == windowID
+        else {
+            return
+        }
+
+        guard activeWindowFrameMatchesLayout(window) else {
+            debugLog("forcing active layout correction for \(window.appName)")
+            forceActiveWindowLayout(window, focusActiveWindow: focusActiveWindow)
+            return
+        }
+    }
+
+    private func forceActiveWindowLayout(_ window: ManagedWindow, focusActiveWindow: Bool) {
+        guard let expectedItem = currentLayoutItem(for: window), expectedItem.visible else {
+            return
+        }
+
+        applyFrame(expectedItem.frame, to: window, force: true)
+        setWindowAlpha(1, for: window.windowID)
+        if focusActiveWindow {
+            requestFocus(window, verify: false, delay: 0)
+        }
+    }
+
     private func systemFrameMatchesCurrentLayout(for element: AXUIElement) -> Bool {
         guard let window = tiledWindow(for: element),
               let expectedItem = currentLayoutItem(for: window),
@@ -3519,7 +3654,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         clearAppliedLayoutCache()
         let viewport = currentViewport()
         let layout = layoutItems(viewport: viewport, state: captureLayoutState(), parkHidden: true)
-        applyLayout(layout, focusActiveWindow: focusActiveWindow, verifyFocus: verifyFocus)
+        applyLayout(
+            layout,
+            focusActiveWindow: focusActiveWindow,
+            verifyFocus: verifyFocus,
+            forceFocusedFrame: focusActiveWindow
+        )
         restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
     }
 
@@ -3618,29 +3758,23 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private func writeLayoutSnapshots(viewport: CGRect, timing: LayoutSnapshotTiming) {
         switch timing {
         case .immediate:
-            snapshotWriteTimer?.cancel()
-            snapshotWriteTimer = nil
+            cancelTimer(&snapshotWriteTimer)
             pendingSnapshotViewport = nil
             writeLayoutSnapshotsNow(viewport: viewport)
         case .deferred:
             pendingSnapshotViewport = viewport
-            guard snapshotWriteTimer == nil else {
-                return
-            }
-
-            let timer = DispatchSource.makeTimerSource(queue: .main)
-            timer.schedule(deadline: .now() + .milliseconds(180), leeway: .milliseconds(40))
-            timer.setEventHandler { [weak self] in
+            cancelTimer(&snapshotWriteTimer)
+            snapshotWriteTimer = makeMainTimer(
+                deadline: .now() + .milliseconds(180),
+                leeway: .milliseconds(40)
+            ) { [weak self] in
                 self?.flushDeferredLayoutSnapshots()
             }
-            snapshotWriteTimer = timer
-            timer.resume()
         }
     }
 
     private func flushDeferredLayoutSnapshots() {
-        snapshotWriteTimer?.cancel()
-        snapshotWriteTimer = nil
+        cancelTimer(&snapshotWriteTimer)
 
         let viewport = pendingSnapshotViewport ?? currentViewport()
         pendingSnapshotViewport = nil
@@ -3808,8 +3942,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return
         }
 
-        snapshotWriteTimer?.cancel()
-        snapshotWriteTimer = nil
+        cancelTimer(&snapshotWriteTimer)
         pendingSnapshotViewport = nil
         clearAppliedLayoutCache()
         let viewport = currentViewport()
@@ -3942,7 +4075,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         manualResizeElement = element
-        manualResizeEndTimer?.cancel()
+        cancelTimer(&manualResizeEndTimer)
         stopAnimation(clearPresentation: false)
 
         if updateManualWidthRatio(for: element) {
@@ -3964,15 +4097,15 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     private func scheduleManualResizeEnd(for element: AXUIElement) {
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .milliseconds(140), leeway: .milliseconds(20))
-        timer.setEventHandler { [weak self] in
+        manualResizeEndTimer = makeMainTimer(
+            deadline: .now() + .milliseconds(140),
+            leeway: .milliseconds(20)
+        ) { [weak self] in
             guard let self else {
                 return
             }
 
-            manualResizeEndTimer?.cancel()
-            manualResizeEndTimer = nil
+            cancelTimer(&manualResizeEndTimer)
 
             if manualResizeElement.map({ sameWindow($0, element) }) == true {
                 _ = updateManualWidthRatio(for: element)
@@ -3980,9 +4113,6 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 manualResizeElement = nil
             }
         }
-
-        manualResizeEndTimer = timer
-        timer.resume()
     }
 
     private func isManualResizeElement(_ element: AXUIElement) -> Bool {
