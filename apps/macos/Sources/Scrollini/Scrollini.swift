@@ -39,6 +39,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var scheduledRescanProjectLayout = false
     private var pendingColumnNavigationDelta = 0
     private var pendingColumnNavigationTimer: DispatchSourceTimer?
+    private var pendingColumnNavigationStartedAt: CFAbsoluteTime = 0
+    private var pendingColumnNavigationProjectionState: LayoutState?
+    private var columnNavigationFocusTimer: DispatchSourceTimer?
+    private var columnNavigationFocusGeneration: UInt64 = 0
+    private var lastColumnNavigationAt: CFAbsoluteTime = 0
+    private var lastColumnNavigationDirection = 0
     private var rescanTimer: Timer?
     private var isApplyingLayout = false
     private var layoutLockGeneration: UInt64 = 0
@@ -688,6 +694,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             enqueueColumnNavigation(delta: 1)
         default:
             flushPendingColumnNavigation()
+            flushColumnNavigationProjection(animated: false)
+            cancelColumnNavigationFocus()
             perform(command)
         }
     }
@@ -698,17 +706,32 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         pendingColumnNavigationDelta += delta
-        guard pendingColumnNavigationTimer == nil else {
+        let now = CFAbsoluteTimeGetCurrent()
+        if pendingColumnNavigationStartedAt == 0 {
+            pendingColumnNavigationStartedAt = now
+        }
+        let burstActive = columnNavigationInputBurstIsActive()
+        let delay: DispatchTimeInterval = burstActive
+            ? (now - pendingColumnNavigationStartedAt >= 0.11 ? .milliseconds(1) : .milliseconds(55))
+            : .milliseconds(6)
+        if let pendingColumnNavigationTimer {
+            if burstActive {
+                pendingColumnNavigationTimer.schedule(
+                    deadline: .now() + delay,
+                    leeway: .milliseconds(4)
+                )
+            }
             return
         }
 
-        pendingColumnNavigationTimer = makeMainTimer(deadline: .now() + .milliseconds(12)) { [weak self] in
+        pendingColumnNavigationTimer = makeMainTimer(deadline: .now() + delay) { [weak self] in
             self?.flushPendingColumnNavigation()
         }
     }
 
     private func flushPendingColumnNavigation() {
         cancelTimer(&pendingColumnNavigationTimer)
+        pendingColumnNavigationStartedAt = 0
 
         let delta = pendingColumnNavigationDelta
         pendingColumnNavigationDelta = 0
@@ -717,6 +740,88 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         performColumnNavigation(by: delta)
+    }
+
+    private func columnNavigationInputBurstIsActive() -> Bool {
+        animationTimer != nil
+            || pendingColumnNavigationProjectionState != nil
+            || columnNavigationFocusTimer != nil
+            || CFAbsoluteTimeGetCurrent() - lastColumnNavigationAt < 0.18
+    }
+
+    private func scheduleColumnNavigationFocus(after delay: TimeInterval) {
+        guard let window = activeWindow() else {
+            cancelColumnNavigationFocus()
+            return
+        }
+
+        cancelTimer(&columnNavigationFocusTimer)
+        columnNavigationFocusGeneration &+= 1
+        let generation = columnNavigationFocusGeneration
+        let windowID = ObjectIdentifier(window)
+        let focusDelay = max(delay, 0.02)
+        markExpectedFocusedWindow(for: window, duration: focusDelay + 1.0)
+        suppressFocusedWindowAdoption(for: focusDelay + 0.5)
+
+        columnNavigationFocusTimer = makeMainTimer(
+            deadline: .now() + focusDelay,
+            leeway: .milliseconds(4)
+        ) { [weak self] in
+            self?.settleColumnNavigationFocus(windowID: windowID, generation: generation)
+        }
+    }
+
+    private func settleColumnNavigationFocus(windowID: ObjectIdentifier, generation: UInt64) {
+        guard generation == columnNavigationFocusGeneration else {
+            return
+        }
+
+        cancelTimer(&columnNavigationFocusTimer)
+        guard pendingColumnNavigationProjectionState == nil
+        else {
+            scheduleColumnNavigationFocus(after: 0.025)
+            return
+        }
+
+        guard let window = activeWindow(),
+              ObjectIdentifier(window) == windowID
+        else {
+            return
+        }
+
+        guard animationTimer == nil else {
+            scheduleColumnNavigationFocus(after: 0.025)
+            return
+        }
+
+        focus(window, verify: true)
+    }
+
+    private func cancelColumnNavigationFocus() {
+        columnNavigationFocusGeneration &+= 1
+        cancelTimer(&columnNavigationFocusTimer)
+    }
+
+    private func flushColumnNavigationProjection(animated: Bool) {
+        guard let previousState = pendingColumnNavigationProjectionState else {
+            return
+        }
+        pendingColumnNavigationProjectionState = nil
+
+        let targetState = captureLayoutState()
+        let shouldAnimate = animated && (previousState != targetState || !presentationFrames.isEmpty)
+        let duration = shouldAnimate ? columnNavigationRetargetAnimationDuration : 0
+        projectLayout(
+            focusActiveWindow: false,
+            animated: shouldAnimate,
+            from: previousState,
+            animationDuration: duration,
+            layoutLockDelay: 0.04,
+            prefocusActiveWindow: false,
+            snapshotTiming: .deferred,
+            verifyActiveLayout: false
+        )
+        scheduleColumnNavigationFocus(after: duration + 0.025)
     }
 
     private func makeCommandByKeybinding() -> [String: Command] {
@@ -1035,6 +1140,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
         suppressHoverFocusAfterTrackpadMovement()
         cancelHoverFocus()
+        flushPendingColumnNavigation()
+        flushColumnNavigationProjection(animated: false)
+        cancelColumnNavigationFocus()
         hoverFocusRequiresRearm = false
         stopTrackpadMomentum()
         stopAnimation(clearPresentation: false)
@@ -1329,22 +1437,43 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         cancelHoverFocus()
         hoverFocusRequiresRearm = false
 
+        let now = CFAbsoluteTimeGetCurrent()
+        let stepCount = abs(delta)
+        let burstIsActive = columnNavigationBurstIsActive(at: now, stepCount: stepCount)
         let previousState = captureLayoutState()
         guard focusColumn(relativeOffset: delta) else {
             return
         }
 
+        layoutVerificationGeneration &+= 1
         let newState = captureLayoutState()
-        markExpectedFocusedWindow(for: activeWindow(), duration: columnNavigationAnimationDuration + 1.0)
-        debugLog("column navigation delta=\(delta) workspace=\(newState.activeWorkspace + 1)")
+        lastColumnNavigationAt = now
+        lastColumnNavigationDirection = delta.signum()
+        let duration = burstIsActive ? columnNavigationRetargetAnimationDuration : columnNavigationAnimationDuration
+        markExpectedFocusedWindow(for: activeWindow(), duration: duration + 1.0)
+        suppressFocusedWindowAdoption(for: duration + 0.5)
+        debugLog("column navigation delta=\(delta) workspace=\(newState.activeWorkspace + 1) burst=\(burstIsActive)")
+
+        if burstIsActive {
+            if pendingColumnNavigationProjectionState == nil {
+                pendingColumnNavigationProjectionState = previousState
+            }
+            suppressManualResizeNotifications(for: 0.25)
+            flushColumnNavigationProjection(animated: true)
+            return
+        }
 
         projectLayout(
-            focusActiveWindow: true,
+            focusActiveWindow: false,
             animated: previousState != newState,
             from: previousState,
-            animationDuration: columnNavigationAnimationDuration,
-            prefocusActiveWindow: shouldPrefocusColumnNavigation(from: previousState)
+            animationDuration: duration,
+            layoutLockDelay: 0.04,
+            prefocusActiveWindow: false,
+            snapshotTiming: .deferred,
+            verifyActiveLayout: false
         )
+        scheduleColumnNavigationFocus(after: duration + 0.025)
     }
 
     private func perform(_ command: Command) {
@@ -1614,32 +1743,6 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         workspace.activeColumn = targetIndex
         workspace.scrollOffset = nil
         return true
-    }
-
-    private func shouldPrefocusColumnNavigation(from previousState: LayoutState) -> Bool {
-        let threshold: CGFloat = 0.98
-        let sourceIsFullWidth = activeWindow(in: previousState).map { widthRatio(for: $0) >= threshold } ?? false
-        let targetIsFullWidth = activeWindow().map { widthRatio(for: $0) >= threshold } ?? false
-        return sourceIsFullWidth || targetIsFullWidth
-    }
-
-    private func activeWindow(in state: LayoutState) -> ManagedWindow? {
-        guard !workspaces.isEmpty else {
-            return nil
-        }
-
-        let workspaceIndex = min(max(state.activeWorkspace, 0), workspaces.count - 1)
-        let workspace = workspaces[workspaceIndex]
-        guard !workspace.columns.isEmpty else {
-            return nil
-        }
-
-        let columnIndex = activeColumn(in: workspace, workspaceIndex: workspaceIndex, state: state)
-        guard workspace.columns.indices.contains(columnIndex) else {
-            return nil
-        }
-
-        return workspace.columns[columnIndex]
     }
 
     private func moveActiveColumnHorizontally(by delta: Int) -> Bool {
@@ -2185,11 +2288,30 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     private var columnNavigationAnimationDuration: TimeInterval {
-        guard animationTimer != nil else {
-            return keyboardAnimationDuration
+        min(
+            keyboardAnimationDuration,
+            max(keyboardAnimationDuration * 0.65, 0.12)
+        )
+    }
+
+    private var columnNavigationRetargetAnimationDuration: TimeInterval {
+        min(columnNavigationAnimationDuration, max(keyboardAnimationDuration * 0.2, 0.045))
+    }
+
+    private func columnNavigationBurstIsActive(at now: CFAbsoluteTime, stepCount: Int) -> Bool {
+        if animationTimer != nil
+            || pendingColumnNavigationProjectionState != nil
+            || columnNavigationFocusTimer != nil
+            || stepCount > 1
+        {
+            return true
         }
 
-        return min(keyboardAnimationDuration, max(keyboardAnimationDuration * 0.35, 0.07))
+        guard now - lastColumnNavigationAt < 0.18 else {
+            return false
+        }
+
+        return lastColumnNavigationDirection != 0
     }
 
     private var hoverFocusAnimationDuration: TimeInterval {
@@ -2425,7 +2547,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         animationDuration: TimeInterval? = nil,
         layoutLockDelay: TimeInterval = 0.08,
         prefocusActiveWindow: Bool = false,
-        snapshotTiming: LayoutSnapshotTiming = .immediate
+        snapshotTiming: LayoutSnapshotTiming = .immediate,
+        verifyActiveLayout: Bool = true
     ) {
         let viewport = currentViewport()
         writeLayoutSnapshots(viewport: viewport, timing: animated ? .deferred : snapshotTiming)
@@ -2449,7 +2572,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 viewport: viewport,
                 focusActiveWindow: focusActiveWindow,
                 prefocusActiveWindow: prefocusActiveWindow,
-                duration: duration
+                duration: duration,
+                verifyActiveLayout: verifyActiveLayout
             )
             return
         }
@@ -2458,7 +2582,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         beginLayoutLock()
         let layout = layoutItems(viewport: viewport, state: targetState, parkHidden: true)
         applyLayout(layout, focusActiveWindow: focusActiveWindow, forceFocusedFrame: focusActiveWindow)
-        scheduleActiveLayoutVerification(focusActiveWindow: focusActiveWindow)
+        if verifyActiveLayout {
+            scheduleActiveLayoutVerification(
+                focusActiveWindow: focusActiveWindow,
+                layoutLockDelay: layoutLockDelay
+            )
+        }
         restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
         releaseLayoutLock(after: layoutLockDelay)
     }
@@ -3003,7 +3132,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         viewport: CGRect,
         focusActiveWindow: Bool,
         prefocusActiveWindow: Bool,
-        duration: TimeInterval
+        duration: TimeInterval,
+        verifyActiveLayout: Bool
     ) {
         stopAnimation(clearPresentation: false)
         let generation = nextAnimationGeneration()
@@ -3025,7 +3155,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             guard let startFrame, let endFrame else {
                 return nil
             }
-            let participates = startFrame.union(endFrame).intersects(viewport)
+            let participates = startFrame.intersects(viewport) || endFrame.intersects(viewport)
             let sizeStable = abs(startFrame.width - endFrame.width) < 0.5
                 && abs(startFrame.height - endFrame.height) < 0.5
             return WindowMotion(
@@ -3041,17 +3171,21 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
         guard !motions.isEmpty else {
             applyLayout(finalLayout, focusActiveWindow: focusActiveWindow, forceFocusedFrame: focusActiveWindow)
-            scheduleActiveLayoutVerification(focusActiveWindow: focusActiveWindow)
+            if verifyActiveLayout {
+                scheduleActiveLayoutVerification(focusActiveWindow: focusActiveWindow)
+            }
             restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
             presentationFrames.removeAll()
             releaseLayoutLock()
             return
         }
 
+        var nextPresentationFrames: [ObjectIdentifier: CGRect] = [:]
         for motion in motions where motion.participates {
             applyFrame(motion.startFrame, to: motion)
+            nextPresentationFrames[ObjectIdentifier(motion.window)] = motion.startFrame
         }
-        presentationFrames = presentationFrames(for: motions, progress: 0)
+        presentationFrames = nextPresentationFrames
 
         primeAnimationVisibility(for: motions)
         if prefocusActiveWindow, focusActiveWindow, let activeWindow = self.activeWindow() {
@@ -3092,7 +3226,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                     focusDelay: focusActiveWindow ? 0.035 : 0,
                     forceFocusedFrame: focusActiveWindow
                 )
-                scheduleActiveLayoutVerification(focusActiveWindow: focusActiveWindow)
+                if verifyActiveLayout {
+                    scheduleActiveLayoutVerification(focusActiveWindow: focusActiveWindow)
+                }
                 restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
                 presentationFrames.removeAll()
                 releaseLayoutLock()
@@ -3104,34 +3240,25 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         Dictionary(uniqueKeysWithValues: layout.map { (ObjectIdentifier($0.window), $0) })
     }
 
-    private func presentationFrames(for motions: [WindowMotion], progress: CGFloat) -> [ObjectIdentifier: CGRect] {
-        Dictionary(uniqueKeysWithValues: motions.compactMap { motion in
-            guard motion.participates else {
-                return nil
-            }
-            return (
-                ObjectIdentifier(motion.window),
-                interpolate(from: motion.startFrame, to: motion.endFrame, progress: progress)
-            )
-        })
-    }
-
     private func applyAnimationFrame(
         _ motions: [WindowMotion],
         progress: CGFloat,
         viewport: CGRect
     ) {
+        var nextPresentationFrames: [ObjectIdentifier: CGRect] = [:]
+
         for motion in motions {
             guard motion.participates else {
                 continue
             }
 
             let frame = interpolate(from: motion.startFrame, to: motion.endFrame, progress: progress)
+            nextPresentationFrames[ObjectIdentifier(motion.window)] = frame
             applyFrame(frame, to: motion)
             applyAnimationVisibility(for: motion, progress: progress)
         }
 
-        presentationFrames = presentationFrames(for: motions, progress: progress)
+        presentationFrames = nextPresentationFrames
     }
 
     private func primeAnimationVisibility(for motions: [WindowMotion]) {
@@ -3573,12 +3700,18 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return framesApproximatelyEqual(actualFrame, expectedItem.frame, tolerance: 2)
     }
 
-    private func scheduleActiveLayoutVerification(focusActiveWindow: Bool) {
+    private func scheduleActiveLayoutVerification(
+        focusActiveWindow: Bool,
+        layoutLockDelay: TimeInterval = 0.08
+    ) {
+        layoutVerificationGeneration &+= 1
+        guard !focusActiveWindow, layoutLockDelay > 0 else {
+            return
+        }
         guard let window = activeWindow() else {
             return
         }
 
-        layoutVerificationGeneration &+= 1
         let generation = layoutVerificationGeneration
         let windowID = ObjectIdentifier(window)
         for delay in [0.06, 0.16, 0.32] {
@@ -3763,7 +3896,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             writeLayoutSnapshotsNow(viewport: viewport)
         case .deferred:
             pendingSnapshotViewport = viewport
-            cancelTimer(&snapshotWriteTimer)
+            if let snapshotWriteTimer {
+                snapshotWriteTimer.schedule(
+                    deadline: .now() + .milliseconds(180),
+                    leeway: .milliseconds(40)
+                )
+                return
+            }
+
             snapshotWriteTimer = makeMainTimer(
                 deadline: .now() + .milliseconds(180),
                 leeway: .milliseconds(40)
