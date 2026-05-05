@@ -84,7 +84,7 @@
   "rules": [
     {
       "bundle_id": "com.apple.finder",
-      "behavior": "ignore"
+      "behavior": "float"
     }
   ]
 }

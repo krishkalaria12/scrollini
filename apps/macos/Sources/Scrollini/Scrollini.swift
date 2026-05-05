@@ -5,6 +5,11 @@ import Darwin
 import Foundation
 
 final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
+    private enum LayoutSnapshotTiming {
+        case immediate
+        case deferred
+    }
+
     private struct TrackpadNavigationSettings: Equatable {
         var enabled: Bool
         var fingers: Int
@@ -29,6 +34,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var eventTapSource: CFRunLoopSource?
     private var commandByKeybinding: [String: Command] = [:]
     private var excludedKeybindingSet = Set<String>()
+    private var scheduledRescanTimer: DispatchSourceTimer?
+    private var scheduledRescanAdoptFocused = false
+    private var scheduledRescanProjectLayout = false
     private var pendingColumnNavigationDelta = 0
     private var pendingColumnNavigationTimer: DispatchSourceTimer?
     private var rescanTimer: Timer?
@@ -58,6 +66,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var manualResizeElement: AXUIElement?
     private var manualResizeSuppressedUntil: CFAbsoluteTime = 0
     private var presentationFrames: [ObjectIdentifier: CGRect] = [:]
+    private var appliedFrames: [ObjectIdentifier: CGRect] = [:]
+    private var appliedAlphas: [UInt32: Float] = [:]
+    private var appliedWindowLevels: [UInt32: Int32] = [:]
+    private var snapshotWriteTimer: DispatchSourceTimer?
+    private var pendingSnapshotViewport: CGRect?
+    private var lastPersistentLayoutSnapshotData: Data?
+    private var lastRestoreSnapshotData: Data?
+    private var floatingRaiseGeneration: UInt64 = 0
     private lazy var persistentLayoutSnapshot = readPersistentLayoutSnapshot()
     private var needsPersistentLayoutRestore = true
     private var signalSources: [DispatchSourceSignal] = []
@@ -65,6 +81,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         .appendingPathComponent("scrollini-\(ProcessInfo.processInfo.processIdentifier).restore.json")
     private var cleanupWatcher: Process?
     private var statusItem: NSStatusItem?
+    private let normalWindowLevel = Int32(CGWindowLevelForKey(.normalWindow))
+    private let floatingWindowLevel = Int32(CGWindowLevelForKey(.floatingWindow))
 
     func start() {
         guard requestAccessibilityPermission() else {
@@ -378,6 +396,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     @objc private func reapplyLayoutFromStatusItem() {
         cancelHoverFocus()
         clearTrackpadCamera()
+        clearAppliedLayoutCache()
         rescanWindows(adoptFocused: false)
         projectLayout(focusActiveWindow: false)
         updateStatusItem()
@@ -1128,7 +1147,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         let delta = trackpadPendingCameraDelta
         trackpadPendingCameraDelta = .zero
         _ = applyTrackpadCameraDelta(delta, viewport: viewport)
-        projectLayout(focusActiveWindow: false, layoutLockDelay: 0)
+        projectLayout(focusActiveWindow: false, layoutLockDelay: 0, snapshotTiming: .deferred)
     }
 
     private func stepTrackpadMomentum() {
@@ -1154,7 +1173,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             trackpadCameraVelocity.y = 0
         }
 
-        projectLayout(focusActiveWindow: false, layoutLockDelay: 0)
+        projectLayout(focusActiveWindow: false, layoutLockDelay: 0, snapshotTiming: .deferred)
 
         if abs(trackpadCameraVelocity.x) < trackpadNavigationMomentumMinVelocity,
            abs(trackpadCameraVelocity.y) < trackpadNavigationMomentumMinVelocity
@@ -1789,15 +1808,43 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     @objc private func applicationLaunched(_ notification: Notification) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            self?.rescanWindows(adoptFocused: true)
-        }
+        scheduleRescan(after: 0.4, adoptFocused: true)
     }
 
     @objc private func applicationTerminated(_ notification: Notification) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.rescanWindows(adoptFocused: false)
-            self?.projectLayout(focusActiveWindow: false)
+        scheduleRescan(after: 0.1, adoptFocused: false, projectLayoutAfter: true)
+    }
+
+    private func scheduleRescan(
+        after delay: TimeInterval,
+        adoptFocused: Bool,
+        projectLayoutAfter: Bool = false
+    ) {
+        scheduledRescanAdoptFocused = scheduledRescanAdoptFocused || adoptFocused
+        scheduledRescanProjectLayout = scheduledRescanProjectLayout || projectLayoutAfter
+        scheduledRescanTimer?.cancel()
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + delay, leeway: .milliseconds(25))
+        timer.setEventHandler { [weak self] in
+            self?.runScheduledRescan()
+        }
+        scheduledRescanTimer = timer
+        timer.resume()
+    }
+
+    private func runScheduledRescan() {
+        scheduledRescanTimer?.cancel()
+        scheduledRescanTimer = nil
+
+        let adoptFocused = scheduledRescanAdoptFocused
+        let projectLayoutAfter = scheduledRescanProjectLayout
+        scheduledRescanAdoptFocused = false
+        scheduledRescanProjectLayout = false
+
+        rescanWindows(adoptFocused: adoptFocused)
+        if projectLayoutAfter {
+            projectLayout(focusActiveWindow: false)
         }
     }
 
@@ -1809,20 +1856,22 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         let discovered = discoverWindows()
+        var knownWindows = allWindows()
         var changed = false
 
-        for window in allWindows() {
+        for window in knownWindows {
             if !discovered.contains(where: { sameWindow($0.element, window.element) }) {
                 if behavior(for: window) == .ignore {
                     setWindowAlpha(1, for: window.windowID)
                 }
                 removeWindow(window)
+                knownWindows.removeAll { $0 === window }
                 changed = true
             }
         }
 
         for found in discovered {
-            if let existing = allWindows().first(where: { sameWindow($0.element, found.element) }) {
+            if let existing = knownWindows.first(where: { sameWindow($0.element, found.element) }) {
                 existing.title = found.title
                 existing.appName = found.appName
                 existing.bundleID = found.bundleID
@@ -1844,12 +1893,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 } else {
                     insertNewWindow(found, applyLayout: false, focusNewWindow: false)
                 }
+                knownWindows.append(found)
                 changed = true
             }
         }
 
         let restoredPersistentLayout = applyPersistentLayoutSnapshotIfNeeded()
         ensureTrailingEmptyWorkspace()
+        pruneAppliedLayoutCache()
 
         if adoptFocused {
             let adoptedFocusedWindow = adoptFocusedWindow(
@@ -1868,6 +1919,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     private func discoverWindows() -> [ManagedWindow] {
         let currentPID = ProcessInfo.processInfo.processIdentifier
+        let knownWindows = allWindows()
         var windows: [ManagedWindow] = []
 
         for app in NSWorkspace.shared.runningApplications {
@@ -1888,7 +1940,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 continue
             }
 
-            for element in axWindows where isManageableWindow(element) || isKnownWindow(element) {
+            for element in axWindows where isManageableWindow(element) || isKnownWindow(element, in: knownWindows) {
                 let title = axString(element, kAXTitleAttribute) ?? ""
                 let appName = app.localizedName ?? "pid \(pid)"
                 let windowID = SkyLight.shared.windowID(for: element)
@@ -1936,8 +1988,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return positionError == .success && sizeError == .success && positionSettable.boolValue && sizeSettable.boolValue
     }
 
-    private func isKnownWindow(_ element: AXUIElement) -> Bool {
-        allWindows().contains { sameWindow($0.element, element) }
+    private func isKnownWindow(_ element: AXUIElement, in knownWindows: [ManagedWindow]) -> Bool {
+        knownWindows.contains { sameWindow($0.element, element) }
     }
 
     private func insertNewWindow(_ window: ManagedWindow, applyLayout: Bool = true, focusNewWindow: Bool = true) {
@@ -1993,13 +2045,17 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         if !floatingWindows.contains(where: { $0 === window }) {
             floatingWindows.append(window)
         }
+        setWindowAlpha(1, for: window.windowID)
+        setFloatingWindowLevel(for: window)
         if applyLayout {
             projectLayout(focusActiveWindow: false)
         }
     }
 
     private func removeWindow(_ window: ManagedWindow) {
+        invalidateAppliedLayoutCache(for: window)
         if let index = floatingWindows.firstIndex(where: { $0 === window }) {
+            resetFloatingWindowLevel(for: window)
             floatingWindows.remove(at: index)
             return
         }
@@ -2301,11 +2357,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         from previousState: LayoutState? = nil,
         animationDuration: TimeInterval? = nil,
         layoutLockDelay: TimeInterval = 0.08,
-        prefocusActiveWindow: Bool = false
+        prefocusActiveWindow: Bool = false,
+        snapshotTiming: LayoutSnapshotTiming = .immediate
     ) {
         let viewport = currentViewport()
-        writeRestoreSnapshot(viewport: viewport)
-        writePersistentLayoutSnapshot()
+        writeLayoutSnapshots(viewport: viewport, timing: snapshotTiming)
 
         let targetState = captureLayoutState()
         updateStatusItem()
@@ -2335,7 +2391,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         isApplyingLayout = true
         let layout = layoutItems(viewport: viewport, state: targetState, parkHidden: true)
         applyLayout(layout, focusActiveWindow: focusActiveWindow)
-        restoreFloatingVisibility()
+        restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
         releaseLayoutLock(after: layoutLockDelay)
     }
 
@@ -2417,24 +2473,24 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     ) {
         if focusActiveWindow, let activeWindow = self.activeWindow() {
             if let activeItem = layout.first(where: { $0.window === activeWindow }) {
-                setAXFrame(activeItem.frame, for: activeWindow.element)
+                applyFrame(activeItem.frame, to: activeWindow)
                 setWindowAlpha(1, for: activeWindow.windowID)
             }
 
             let inactiveVisible = layout.filter { $0.visible && $0.window !== activeWindow }
             for item in inactiveVisible {
-                setAXFrame(item.frame, for: item.window.element)
+                applyFrame(item.frame, to: item.window)
                 setWindowAlpha(1, for: item.window.windowID)
             }
         } else {
             for item in layout where item.visible {
-                setAXFrame(item.frame, for: item.window.element)
+                applyFrame(item.frame, to: item.window)
                 setWindowAlpha(1, for: item.window.windowID)
             }
         }
 
         for item in layout where !item.visible {
-            setAXFrame(item.frame, for: item.window.element)
+            applyFrame(item.frame, to: item.window)
             setWindowAlpha(0, for: item.window.windowID)
         }
 
@@ -2443,9 +2499,44 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
     }
 
-    private func restoreFloatingVisibility() {
+    private func restoreFloatingVisibility(raise: Bool = false, deferred: Bool = false) {
         for window in floatingWindows {
             setWindowAlpha(1, for: window.windowID)
+            setFloatingWindowLevel(for: window)
+            if raise {
+                AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+            }
+        }
+
+        if raise && deferred {
+            scheduleFloatingWindowRaise()
+        }
+    }
+
+    private func setFloatingWindowLevel(for window: ManagedWindow) {
+        setWindowLevel(floatingWindowLevel, for: window.windowID)
+    }
+
+    private func resetFloatingWindowLevel(for window: ManagedWindow) {
+        setWindowLevel(normalWindowLevel, for: window.windowID)
+    }
+
+    private func scheduleFloatingWindowRaise() {
+        guard !floatingWindows.isEmpty else {
+            return
+        }
+
+        floatingRaiseGeneration &+= 1
+        let generation = floatingRaiseGeneration
+        for delay in [0.04, 0.16, 0.34] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self,
+                      generation == floatingRaiseGeneration
+                else {
+                    return
+                }
+                restoreFloatingVisibility(raise: true)
+            }
         }
     }
 
@@ -2572,7 +2663,66 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         guard hideMethod == .skyLightAlpha else {
             return
         }
+        if let windowID {
+            if let previous = appliedAlphas[windowID], abs(previous - alpha) < 0.001 {
+                return
+            }
+            SkyLight.shared.setAlpha(alpha, for: windowID)
+            appliedAlphas[windowID] = alpha
+            return
+        }
         SkyLight.shared.setAlpha(alpha, for: windowID)
+    }
+
+    private func setWindowLevel(_ level: Int32, for windowID: UInt32?) {
+        guard let windowID, SkyLight.shared.canSetWindowLevel else {
+            return
+        }
+
+        if appliedWindowLevels[windowID] == level {
+            return
+        }
+
+        guard SkyLight.shared.setLevel(level, for: windowID) else {
+            return
+        }
+
+        if level == normalWindowLevel {
+            appliedWindowLevels.removeValue(forKey: windowID)
+        } else {
+            appliedWindowLevels[windowID] = level
+        }
+    }
+
+    private func clearAppliedLayoutCache() {
+        appliedFrames.removeAll()
+        appliedAlphas.removeAll()
+        appliedWindowLevels.removeAll()
+    }
+
+    private func invalidateAppliedLayoutCache(for window: ManagedWindow) {
+        appliedFrames.removeValue(forKey: ObjectIdentifier(window))
+        if let windowID = window.windowID {
+            appliedAlphas.removeValue(forKey: windowID)
+            appliedWindowLevels.removeValue(forKey: windowID)
+        }
+    }
+
+    private func invalidateAppliedLayoutCache(for element: AXUIElement) {
+        guard let window = allWindows().first(where: { sameWindow($0.element, element) }) else {
+            return
+        }
+        invalidateAppliedLayoutCache(for: window)
+    }
+
+    private func pruneAppliedLayoutCache() {
+        let windows = allWindows()
+        let liveWindowIDs = Set(windows.map(ObjectIdentifier.init))
+        appliedFrames = appliedFrames.filter { liveWindowIDs.contains($0.key) }
+
+        let liveSkyLightIDs = Set(windows.compactMap(\.windowID))
+        appliedAlphas = appliedAlphas.filter { liveSkyLightIDs.contains($0.key) }
+        appliedWindowLevels = appliedWindowLevels.filter { liveSkyLightIDs.contains($0.key) }
     }
 
     private func debugLog(_ message: String) {
@@ -2829,7 +2979,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
         guard !motions.isEmpty else {
             applyLayout(finalLayout, focusActiveWindow: focusActiveWindow)
-            restoreFloatingVisibility()
+            restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
             presentationFrames.removeAll()
             releaseLayoutLock()
             return
@@ -2876,7 +3026,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                     focusActiveWindow: focusActiveWindow,
                     focusDelay: focusActiveWindow ? 0.035 : 0
                 )
-                restoreFloatingVisibility()
+                restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
                 presentationFrames.removeAll()
                 releaseLayoutLock()
             }
@@ -2935,10 +3085,36 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     private func applyFrame(_ frame: CGRect, to motion: WindowMotion) {
-        if motion.sizeStable {
-            setAXPosition(frame.origin, for: motion.window.element)
+        applyFrame(frame, to: motion.window, sizeStable: motion.sizeStable)
+    }
+
+    private func applyFrame(
+        _ frame: CGRect,
+        to window: ManagedWindow,
+        sizeStable: Bool = false,
+        force: Bool = false
+    ) {
+        let id = ObjectIdentifier(window)
+        if !force,
+           let previous = appliedFrames[id],
+           framesApproximatelyEqual(previous, frame, tolerance: 0.5)
+        {
+            return
+        }
+
+        let succeeded: Bool
+        if sizeStable,
+           let previous = appliedFrames[id],
+           abs(previous.width - frame.width) < 0.5,
+           abs(previous.height - frame.height) < 0.5
+        {
+            succeeded = setAXPosition(frame.origin, for: window.element)
         } else {
-            setAXFrame(frame, for: motion.window.element)
+            succeeded = setAXFrame(frame, for: window.element)
+        }
+
+        if succeeded {
+            appliedFrames[id] = frame
         }
     }
 
@@ -3265,6 +3441,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, window.element)
         AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
         AXUIElementSetAttributeValue(window.element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        restoreFloatingVisibility(raise: true, deferred: true)
         if verify {
             scheduleFocusVerification(for: window)
         }
@@ -3312,6 +3489,19 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return framesApproximatelyEqual(actualFrame, expectedItem.frame, tolerance: 2)
     }
 
+    private func systemFrameMatchesCurrentLayout(for element: AXUIElement) -> Bool {
+        guard let window = tiledWindow(for: element),
+              let expectedItem = currentLayoutItem(for: window),
+              let actualFrame = axFrame(element),
+              framesApproximatelyEqual(actualFrame, expectedItem.frame, tolerance: 2)
+        else {
+            return false
+        }
+
+        appliedFrames[ObjectIdentifier(window)] = actualFrame
+        return true
+    }
+
     private func currentLayoutItem(for window: ManagedWindow) -> LayoutItem? {
         let viewport = currentViewport()
         let layout = layoutItems(viewport: viewport, state: captureLayoutState(), parkHidden: true)
@@ -3326,10 +3516,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     private func reapplyCurrentLayout(focusActiveWindow: Bool, verifyFocus: Bool) {
+        clearAppliedLayoutCache()
         let viewport = currentViewport()
         let layout = layoutItems(viewport: viewport, state: captureLayoutState(), parkHidden: true)
         applyLayout(layout, focusActiveWindow: focusActiveWindow, verifyFocus: verifyFocus)
-        restoreFloatingVisibility()
+        restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
     }
 
     private func confirmExpectedFocusedWindowIfNeeded(_ window: ManagedWindow) -> Bool {
@@ -3424,9 +3615,47 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return snapshot
     }
 
+    private func writeLayoutSnapshots(viewport: CGRect, timing: LayoutSnapshotTiming) {
+        switch timing {
+        case .immediate:
+            snapshotWriteTimer?.cancel()
+            snapshotWriteTimer = nil
+            pendingSnapshotViewport = nil
+            writeLayoutSnapshotsNow(viewport: viewport)
+        case .deferred:
+            pendingSnapshotViewport = viewport
+            guard snapshotWriteTimer == nil else {
+                return
+            }
+
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + .milliseconds(180), leeway: .milliseconds(40))
+            timer.setEventHandler { [weak self] in
+                self?.flushDeferredLayoutSnapshots()
+            }
+            snapshotWriteTimer = timer
+            timer.resume()
+        }
+    }
+
+    private func flushDeferredLayoutSnapshots() {
+        snapshotWriteTimer?.cancel()
+        snapshotWriteTimer = nil
+
+        let viewport = pendingSnapshotViewport ?? currentViewport()
+        pendingSnapshotViewport = nil
+        writeLayoutSnapshotsNow(viewport: viewport)
+    }
+
+    private func writeLayoutSnapshotsNow(viewport: CGRect) {
+        writeRestoreSnapshot(viewport: viewport)
+        writePersistentLayoutSnapshot()
+    }
+
     private func writePersistentLayoutSnapshot() {
         guard persistLayoutEnabled else {
             try? FileManager.default.removeItem(at: persistentLayoutStateURL)
+            lastPersistentLayoutSnapshotData = nil
             return
         }
 
@@ -3442,6 +3671,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
         guard !states.isEmpty else {
             try? FileManager.default.removeItem(at: persistentLayoutStateURL)
+            lastPersistentLayoutSnapshotData = nil
             return
         }
 
@@ -3456,12 +3686,19 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
         do {
             let url = persistentLayoutStateURL
+            let data = try JSONEncoder().encode(snapshot)
+            if lastPersistentLayoutSnapshotData == data,
+               FileManager.default.fileExists(atPath: url.path)
+            {
+                return
+            }
+
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            let data = try JSONEncoder().encode(snapshot)
             try data.write(to: url, options: [.atomic])
+            lastPersistentLayoutSnapshotData = data
         } catch {
             debugLog("failed to write persistent layout: \(error)")
         }
@@ -3571,33 +3808,54 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return
         }
 
+        snapshotWriteTimer?.cancel()
+        snapshotWriteTimer = nil
+        pendingSnapshotViewport = nil
+        clearAppliedLayoutCache()
         let viewport = currentViewport()
-        for window in tiledWindows() {
+        for window in allWindows() {
             setWindowAlpha(1, for: window.windowID)
+            setWindowLevel(normalWindowLevel, for: window.windowID)
             setAXFrame(viewport, for: window.element)
         }
-        restoreFloatingVisibility()
         try? FileManager.default.removeItem(at: restoreStateURL)
     }
 
     private func writeRestoreSnapshot(viewport: CGRect) {
         guard restoreOnExit else {
             try? FileManager.default.removeItem(at: restoreStateURL)
+            lastRestoreSnapshotData = nil
             return
         }
 
         let ids = Array(Set(tiledWindows().compactMap(\.windowID))).sorted()
-        guard !ids.isEmpty else {
+        let floatingIDs = Array(Set(floatingWindows.compactMap(\.windowID))).sorted()
+        guard !ids.isEmpty || !floatingIDs.isEmpty else {
             try? FileManager.default.removeItem(at: restoreStateURL)
+            lastRestoreSnapshotData = nil
             return
         }
 
-        let snapshot = RestoreSnapshot(windowIDs: ids, viewport: RectSnapshot(viewport))
+        let snapshot = RestoreSnapshot(
+            windowIDs: ids,
+            floatingWindowIDs: floatingIDs,
+            viewport: RectSnapshot(viewport)
+        )
         guard let data = try? JSONEncoder().encode(snapshot) else {
             return
         }
+        if lastRestoreSnapshotData == data,
+           FileManager.default.fileExists(atPath: restoreStateURL.path)
+        {
+            return
+        }
 
-        try? data.write(to: restoreStateURL, options: [.atomic])
+        do {
+            try data.write(to: restoreStateURL, options: [.atomic])
+            lastRestoreSnapshotData = data
+        } catch {
+            debugLog("failed to write restore snapshot: \(error)")
+        }
     }
 
     private func location(of element: AXUIElement) -> (workspace: Int, column: Int)? {
@@ -3675,7 +3933,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private func beginOrContinueManualResize(for element: AXUIElement) {
         cancelHoverFocus()
         guard tiledWindow(for: element) != nil else {
-            restoreFloatingVisibility()
+            restoreFloatingVisibility(raise: true)
             return
         }
 
@@ -3688,7 +3946,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         stopAnimation(clearPresentation: false)
 
         if updateManualWidthRatio(for: element) {
-            projectLayout(focusActiveWindow: false, layoutLockDelay: 0)
+            projectLayout(focusActiveWindow: false, layoutLockDelay: 0, snapshotTiming: .deferred)
         }
 
         scheduleManualResizeEnd(for: element)
@@ -3842,17 +4100,19 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             rescanWindows(adoptFocused: false)
             adoptFocusedWindow(pid: pid, respectFocusSuppression: true)
         case kAXCreatedNotification, kAXUIElementDestroyedNotification:
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-                self?.rescanWindows(adoptFocused: true)
-            }
+            scheduleRescan(after: 0.08, adoptFocused: true)
         case kAXWindowResizedNotification:
             guard tiledWindow(for: element) != nil else {
-                restoreFloatingVisibility()
+                restoreFloatingVisibility(raise: true)
                 return
             }
             guard !manualResizeNotificationsSuppressed else {
                 return
             }
+            guard !systemFrameMatchesCurrentLayout(for: element) else {
+                return
+            }
+            invalidateAppliedLayoutCache(for: element)
 
             if manualResizeElement != nil {
                 guard isManualResizeElement(element) else {
@@ -3866,6 +4126,10 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             if manualResizeNotificationsSuppressed, tiledWindow(for: element) != nil {
                 return
             }
+            guard !systemFrameMatchesCurrentLayout(for: element) else {
+                return
+            }
+            invalidateAppliedLayoutCache(for: element)
 
             if manualResizeElement != nil {
                 guard isManualResizeElement(element) else {
@@ -3874,7 +4138,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 beginOrContinueManualResize(for: element)
             } else if !isApplyingLayout {
                 guard let window = tiledWindow(for: element) else {
-                    restoreFloatingVisibility()
+                    restoreFloatingVisibility(raise: true)
                     return
                 }
                 if frameWidthDiffersFromLayout(for: element) {

@@ -3,23 +3,35 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-func setAXFrame(_ frame: CGRect, for element: AXUIElement) {
+@discardableResult
+func setAXFrame(_ frame: CGRect, for element: AXUIElement) -> Bool {
+    var succeeded = true
     var origin = CGPoint(x: frame.minX, y: frame.minY)
     if let positionValue = AXValueCreate(.cgPoint, &origin) {
-        AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, positionValue)
+        succeeded = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, positionValue) == .success
+            && succeeded
+    } else {
+        succeeded = false
     }
 
     var size = CGSize(width: frame.width, height: frame.height)
     if let sizeValue = AXValueCreate(.cgSize, &size) {
-        AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
+        succeeded = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue) == .success
+            && succeeded
+    } else {
+        succeeded = false
     }
+
+    return succeeded
 }
 
-func setAXPosition(_ origin: CGPoint, for element: AXUIElement) {
+@discardableResult
+func setAXPosition(_ origin: CGPoint, for element: AXUIElement) -> Bool {
     var origin = origin
     if let positionValue = AXValueCreate(.cgPoint, &origin) {
-        AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, positionValue)
+        return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, positionValue) == .success
     }
+    return false
 }
 
 func currentExecutableURL() -> URL? {

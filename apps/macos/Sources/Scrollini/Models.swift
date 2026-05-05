@@ -43,6 +43,7 @@ final class Workspace {
 
 struct RestoreSnapshot: Codable {
     var windowIDs: [UInt32]
+    var floatingWindowIDs: [UInt32]?
     var viewport: RectSnapshot
 }
 

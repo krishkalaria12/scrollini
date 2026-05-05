@@ -161,7 +161,7 @@ The repo includes a full default config. A compact version looks like this:
   "rules": [
     {
       "bundle_id": "com.apple.finder",
-      "behavior": "ignore"
+      "behavior": "float"
     }
   ]
 }
@@ -185,8 +185,8 @@ Useful string settings:
 
 Rules can match on `bundle_id`, `app_name`, or `title_contains`. Use
 `behavior: "ignore"` for windows scrollini should leave alone, `behavior: "float"`
-for visible untiled windows, and `width_ratio` to override an app's default
-column width. Rules can also set `workspace`, `open_position`,
+for visible untiled windows that should be raised above tiled columns, and
+`width_ratio` to override an app's default column width. Rules can also set `workspace`, `open_position`,
 `trackpad_navigation`, and `hover_to_focus` for matching windows.
 
 With `persist_layout` enabled, scrollini writes a local layout snapshot to
