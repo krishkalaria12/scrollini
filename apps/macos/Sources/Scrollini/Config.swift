@@ -223,7 +223,7 @@ struct ScrolliniConfig: Codable {
         return attributes[.modificationDate] as? Date
     }
 
-    private static func normalize(_ loadedConfig: ScrolliniConfig) -> ScrolliniConfig {
+    static func normalize(_ loadedConfig: ScrolliniConfig) -> ScrolliniConfig {
         var config = loadedConfig
         config.defaultWidthRatio = config.defaultWidthRatio.clampedWidthRatio
         config.presetWidthRatios = normalizeWidthPresets(config.presetWidthRatios)
