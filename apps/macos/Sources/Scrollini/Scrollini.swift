@@ -16,6 +16,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         var fingers: Int
         var invertX: Bool
         var invertY: Bool
+        var directionLockThreshold: CGFloat
     }
 
     private struct TransientSystemWindow {
@@ -59,6 +60,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var focusRequestGeneration: UInt64 = 0
     private var focusVerificationGeneration: UInt64 = 0
     private var layoutVerificationGeneration: UInt64 = 0
+    private var columnMeasurementGeneration: UInt64 = 0
     private var hoverFocusTimer: DispatchSourceTimer?
     private var hoverFocusTarget: ObjectIdentifier?
     private var hoverFocusRequiresRearm = false
@@ -67,6 +69,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private var transientWindowStateCheckedAt: CFAbsoluteTime = 0
     private var trackpadNavigation: ThreeFingerTrackpadNavigation?
     private var trackpadCameraY: CGFloat?
+    /// Axis the in-flight three-finger swipe committed to, so the settle only lands that axis.
+    private var trackpadCameraAxis: TrackpadNavigationAxis?
     private var trackpadCameraVelocity = CGPoint.zero
     private var trackpadPendingCameraDelta = CGSize.zero
     private var trackpadLatestCameraVelocity = CGPoint.zero
@@ -731,7 +735,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         let navigation = ThreeFingerTrackpadNavigation(
             fingers: trackpadNavigationFingers,
             invertX: trackpadNavigationInvertX,
-            invertY: trackpadNavigationInvertY
+            invertY: trackpadNavigationInvertY,
+            directionLockThreshold: trackpadNavigationDirectionLockThreshold
         ) { [weak self] event in
             DispatchQueue.main.async { [weak self] in
                 self?.handleTrackpadNavigationEvent(event)
@@ -1035,6 +1040,10 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return .nudgeAllWidthsNarrower
         case "nudge_all_widths_wider":
             return .nudgeAllWidthsWider
+        case "maximize_column_width":
+            return .maximizeColumnWidth
+        case "reset_column_width":
+            return .resetColumnWidth
         default:
             return nil
         }
@@ -1417,9 +1426,20 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         switch event {
         case .began:
             beginTrackpadCamera()
-        case .changed(let delta, let velocity):
-            moveTrackpadCamera(delta: delta, velocity: velocity)
-        case .ended(let velocity):
+        case let .changed(axis, delta, velocity):
+            moveTrackpadCamera(axis: axis, delta: delta, velocity: velocity)
+        case let .ended(axis, velocity):
+            guard axis != nil else {
+                // The swipe never committed to an axis, so there is nothing to settle. Starting
+                // the gesture pinned the strip's scroll offset, though, so release it and let the
+                // focused column drive the view again.
+                if trackpadNavigationSnap == .nearestColumn {
+                    activeWorkspaceObject()?.scrollOffset = nil
+                }
+                clearTrackpadCamera()
+                projectLayout(focusActiveWindow: false, layoutLockDelay: 0.02)
+                return
+            }
             endTrackpadCamera(velocity: velocity)
         }
     }
@@ -1443,7 +1463,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         startTrackpadRenderLoop()
     }
 
-    private func moveTrackpadCamera(delta: CGPoint, velocity: CGPoint) {
+    private func moveTrackpadCamera(axis: TrackpadNavigationAxis, delta: CGPoint, velocity: CGPoint) {
         guard manualResizeElement == nil else {
             return
         }
@@ -1456,6 +1476,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         trackpadPendingCameraDelta.height += cameraDelta.height
         trackpadLatestCameraVelocity = trackpadCameraVelocity(from: velocity, viewport: viewport)
         trackpadCameraVelocity = trackpadLatestCameraVelocity
+        trackpadCameraAxis = axis
         startTrackpadRenderLoop()
     }
 
@@ -1480,7 +1501,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         let multiplier = trackpadCameraVelocityGain(for: velocity)
         return CGSize(
             width: -delta.x * viewport.width * trackpadNavigationSensitivity * multiplier,
-            height: delta.y * viewport.height * trackpadNavigationSensitivity * multiplier
+            height: delta.y * viewport.height * trackpadNavigationWorkspaceSensitivity * multiplier
         )
     }
 
@@ -1488,7 +1509,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         let multiplier = trackpadCameraVelocityGain(for: velocity)
         return CGPoint(
             x: -velocity.x * viewport.width * trackpadNavigationSensitivity * multiplier,
-            y: velocity.y * viewport.height * trackpadNavigationSensitivity * multiplier
+            y: velocity.y * viewport.height * trackpadNavigationWorkspaceSensitivity * multiplier
         )
     }
 
@@ -1522,6 +1543,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         trackpadPendingCameraDelta = .zero
         trackpadLatestCameraVelocity = .zero
         trackpadCameraVelocity = .zero
+        trackpadCameraAxis = nil
         if clearCameraY {
             trackpadCameraY = nil
         }
@@ -1634,6 +1656,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         let nextY = min(max(currentY + delta.height, 0), maxY)
         trackpadCameraY = nextY
 
+        // A direction-locked vertical swipe carries no horizontal delta, and must not pin the
+        // scroll offset of every workspace the camera passes over on the way.
+        guard abs(delta.width) > 0.01 else {
+            return (false, abs(nextY - (currentY + delta.height)) > 0.5)
+        }
+
         let workspaceIndex = trackpadCameraWorkspaceIndex(cameraY: nextY, viewport: viewport)
         var clampedX = false
         if workspaces.indices.contains(workspaceIndex) {
@@ -1664,13 +1692,20 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         let viewport = currentViewport()
         seedTrackpadCamera(viewport: viewport)
         let previousState = captureLayoutState()
-        let targetWorkspace = trackpadCameraWorkspaceIndex(
-            cameraY: trackpadCameraY ?? CGFloat(activeWorkspace) * viewport.height,
-            viewport: viewport
-        )
-        setActiveWorkspace(targetWorkspace)
 
-        if let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty {
+        // Settle only the axis the swipe committed to. A vertical swipe lands on a workspace and
+        // leaves each workspace's column position exactly where it was; a horizontal swipe lands
+        // on a column without ever changing workspace.
+        let axis = trackpadCameraAxis ?? .horizontal
+        if axis == .vertical {
+            let targetWorkspace = trackpadCameraWorkspaceIndex(
+                cameraY: trackpadCameraY ?? CGFloat(activeWorkspace) * viewport.height,
+                viewport: viewport
+            )
+            setActiveWorkspace(targetWorkspace)
+        }
+
+        if axis == .horizontal, let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty {
             let offset = horizontalCameraOffset(for: workspace, viewport: viewport)
             switch trackpadNavigationSnap {
             case .nearestColumn:
@@ -1925,6 +1960,18 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             }) else {
                 return
             }
+        case .maximizeColumnWidth:
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                toggleMaximizeActiveWidth()
+            }) else {
+                return
+            }
+        case .resetColumnWidth:
+            guard runAnimatedChange(duration: widthAnimationDuration, frameChange: true, {
+                resetActiveWidth()
+            }) else {
+                return
+            }
         }
 
         let newState = captureLayoutState()
@@ -2099,6 +2146,52 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return presets.last(where: { $0 < current - 0.005 }) ?? presets[presets.count - 1]
     }
 
+    /// niri's `maximize-column`: fill the working area, and toggle back to the width the column
+    /// had before on a second press.
+    private func toggleMaximizeActiveWidth() -> Bool {
+        guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
+            return false
+        }
+
+        workspace.clampFocus()
+        let window = workspace.columns[workspace.activeColumn]
+        if let restored = window.preMaximizeWidthRatio {
+            window.preMaximizeWidthRatio = nil
+            return setActiveWindowWidthRatio(restored)
+        }
+
+        let current = widthRatio(for: window)
+        guard current < 1.0 - 0.005 else {
+            return false
+        }
+
+        guard setActiveWindowWidthRatio(1.0) else {
+            return false
+        }
+        window.preMaximizeWidthRatio = current
+        return true
+    }
+
+    /// niri's `reset-window-width`: drop the column back to whatever the config says it should be.
+    private func resetActiveWidth() -> Bool {
+        guard let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty else {
+            return false
+        }
+
+        workspace.clampFocus()
+        let window = workspace.columns[workspace.activeColumn]
+        guard window.manualWidthRatio != nil || window.measuredWidth != nil else {
+            return false
+        }
+
+        window.manualWidthRatio = nil
+        window.preMaximizeWidthRatio = nil
+        window.measuredWidth = nil
+        window.measuredForWidth = nil
+        workspace.scrollOffset = nil
+        return true
+    }
+
     private func nudgeActiveWidth(by delta: CGFloat) -> Bool {
         guard let window = activeWindow() else {
             return false
@@ -2171,6 +2264,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         window.manualWidthRatio = newRatio
+        // Any other width change makes the remembered pre-maximize width meaningless. The maximize
+        // toggle re-arms it right after calling through here.
+        window.preMaximizeWidthRatio = nil
         return true
     }
 
@@ -2459,7 +2555,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return false
         }
 
-        guard let frame = axFrame(element), frame.width >= 120, frame.height >= 80 else {
+        guard let frame = axFrame(of: element), frame.width >= 120, frame.height >= 80 else {
             return false
         }
 
@@ -2744,6 +2840,24 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         config.trackpadNavigationSensitivity ?? ScrolliniConfig.fallback.trackpadNavigationSensitivity ?? 1.6
     }
 
+    /// Vertical sensitivity. niri needs a quarter of the finger travel to change workspace that it
+    /// needs to scroll one screen width of columns (`WORKSPACE_GESTURE_MOVEMENT` 300 against
+    /// `VIEW_GESTURE_WORKING_AREA_MOVEMENT` 1200), which is what makes a swipe up feel like a flick
+    /// rather than a haul. Defaults to that same 4:1 ratio against the horizontal sensitivity.
+    private var trackpadNavigationWorkspaceSensitivity: CGFloat {
+        config.trackpadNavigationWorkspaceSensitivity
+            ?? ScrolliniConfig.fallback.trackpadNavigationWorkspaceSensitivity
+            ?? trackpadNavigationSensitivity * 4
+    }
+
+    /// How far a three-finger swipe travels before it commits to an axis, in trackpad-normalized
+    /// units where `1.0` is the full width of the trackpad.
+    private var trackpadNavigationDirectionLockThreshold: CGFloat {
+        config.trackpadNavigationDirectionLockThreshold
+            ?? ScrolliniConfig.fallback.trackpadNavigationDirectionLockThreshold
+            ?? 0.02
+    }
+
     private var trackpadNavigationDeceleration: CGFloat {
         config.trackpadNavigationDeceleration ?? ScrolliniConfig.fallback.trackpadNavigationDeceleration ?? 5.5
     }
@@ -2775,7 +2889,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             enabled: trackpadNavigationEnabled,
             fingers: trackpadNavigationFingers,
             invertX: trackpadNavigationInvertX,
-            invertY: trackpadNavigationInvertY
+            invertY: trackpadNavigationInvertY,
+            // Baked into the recognizer at construction, so a change has to restart it.
+            directionLockThreshold: trackpadNavigationDirectionLockThreshold
         )
     }
 
@@ -2896,6 +3012,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 duration: duration,
                 verifyActiveLayout: verifyActiveLayout
             )
+            scheduleColumnMeasurement(after: duration + max(layoutLockDelay, 0.08))
             return
         }
 
@@ -2911,6 +3028,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
         restoreFloatingVisibility(raise: true, deferred: focusActiveWindow)
         releaseLayoutLock(after: layoutLockDelay)
+        scheduleColumnMeasurement(after: max(layoutLockDelay, 0.08) + 0.04)
     }
 
     private func layoutItems(viewport: CGRect, state: LayoutState, parkHidden: Bool) -> [LayoutItem] {
@@ -3097,7 +3215,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                 continue
             }
             setWindowAlpha(1, for: SkyLight.shared.windowID(for: transient.element))
-            if let frame = axFrame(transient.element), transientFrameNeedsRecovery(frame, viewport: viewport) {
+            if let frame = axFrame(of: transient.element), transientFrameNeedsRecovery(frame, viewport: viewport) {
                 setAXPosition(centeredOrigin(for: frame, in: viewport), for: transient.element)
                 moved = true
             }
@@ -3399,13 +3517,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             && point.y <= viewport.maxY
     }
 
+    /// Frames leave `stripFrames` with gaps already reserved around them, so what the strip
+    /// computes is what the window gets. Kept as a seam for callers that reason about a column's
+    /// on-screen rectangle.
     private func visualFrame(_ frame: CGRect, viewport: CGRect) -> CGRect {
-        guard innerGap > 0 else {
-            return frame
-        }
-
-        let inset = min(innerGap / 2, frame.width / 3, frame.height / 3)
-        return frame.insetBy(dx: inset, dy: inset)
+        frame
     }
 
     private func insetViewport(_ viewport: CGRect, by inset: CGFloat) -> CGRect {
@@ -3844,12 +3960,15 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             activeColumn: activeColumn,
             viewport: viewport
         )
+        // Column origins live in a gap-free virtual strip, so the leading outer gap is added here
+        // once rather than being baked into every origin.
+        let columnHeight = max(1, viewport.height - innerGap * 2)
         return workspace.columns.indices.map { index in
             CGRect(
-                x: viewport.minX + metrics.origins[index] - scrollOffset,
-                y: viewport.minY,
+                x: viewport.minX + innerGap + metrics.origins[index] - scrollOffset,
+                y: viewport.minY + innerGap,
                 width: metrics.widths[index],
-                height: viewport.height
+                height: columnHeight
             )
         }
     }
@@ -3861,12 +3980,56 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
         for window in workspace.columns {
             origins.append(virtualX)
-            let width = viewport.width * widthRatio(for: window)
+            let width = layoutWidth(for: window, viewport: viewport)
             widths.append(width)
-            virtualX += width
+            virtualX += width + innerGap
         }
 
         return (origins, widths)
+    }
+
+    /// Width this column asks the app for, using niri's proportional sizing: a ratio of `1.0` fills
+    /// the viewport minus one gap on each side, and two `0.5` columns tile it exactly, gaps
+    /// included.
+    private func requestedWidth(for window: ManagedWindow, viewport: CGRect) -> CGFloat {
+        max(1, (viewport.width - innerGap) * widthRatio(for: window) - innerGap)
+    }
+
+    /// Width the strip actually packs against. Apps with minimum sizes or character-cell width
+    /// increments cannot always take the width they are asked for, and laying the neighbours out
+    /// against the *requested* width leaves a visible band of empty desktop next to every such
+    /// window. Packing against the granted width closes those holes, the same way niri packs
+    /// columns against each tile's real size instead of its configured proportion.
+    private func layoutWidth(for window: ManagedWindow, viewport: CGRect) -> CGFloat {
+        let requested = requestedWidth(for: window, viewport: viewport)
+        guard let measuredWidth = window.measuredWidth,
+              let measuredForWidth = window.measuredForWidth,
+              abs(measuredForWidth - requested) < 1
+        else {
+            return requested
+        }
+        return max(1, measuredWidth)
+    }
+
+    /// Records what macOS granted for a window that was just asked to take `requested` width.
+    /// `measuredForWidth` is always stamped, including when the app took the width it was offered,
+    /// so a well-behaved window is not re-measured on every layout; a `nil` `measuredWidth` is the
+    /// recorded answer "this one does not clamp".
+    private func recordMeasuredWidth(_ granted: CGFloat, requested: CGFloat, for window: ManagedWindow) -> Bool {
+        let clamped: CGFloat? = abs(granted - requested) >= 1 ? granted : nil
+        let changed: Bool
+        switch (window.measuredWidth, clamped) {
+        case (nil, nil):
+            changed = false
+        case let (previous?, clamped?):
+            changed = abs(previous - clamped) >= 1
+        default:
+            changed = true
+        }
+
+        window.measuredWidth = clamped
+        window.measuredForWidth = requested
+        return changed
     }
 
     private func horizontalCameraOffset(for workspace: Workspace, viewport: CGRect) -> CGFloat {
@@ -3885,9 +4048,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
 
         let metrics = stripMetrics(for: workspace, viewport: viewport)
-        let contentWidth = zip(metrics.origins, metrics.widths)
-            .map { $0.0 + $0.1 }
-            .max() ?? viewport.width
+        let contentWidth = (zip(metrics.origins, metrics.widths).map { $0.0 + $0.1 }.max() ?? viewport.width)
+            + innerGap * 2
         let lastColumnOffset = defaultScrollOffset(
             metrics: metrics,
             activeColumn: workspace.columns.count - 1,
@@ -3962,14 +4124,17 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         case .smart where activeColumn == 0:
             return metrics.origins.indices.contains(activeColumn) ? metrics.origins[activeColumn] : 0
         case .smart, .center:
+            // Strip frames render at `viewport.minX + innerGap + origin - offset`, so centring has
+            // to cancel that leading gap out.
             let activeCenter = metrics.origins[activeColumn] + metrics.widths[activeColumn] / 2
-            return max(0, activeCenter - viewport.width / 2)
+            return max(0, activeCenter + innerGap - viewport.width / 2)
         }
     }
 
     private func parkedFrame(for window: ManagedWindow, viewport: CGRect, beforeActive: Bool) -> CGRect {
-        let width = viewport.width * widthRatio(for: window)
-        var frame = CGRect(x: viewport.minX, y: viewport.minY, width: width, height: viewport.height)
+        let width = layoutWidth(for: window, viewport: viewport)
+        let height = max(1, viewport.height - innerGap * 2)
+        var frame = CGRect(x: viewport.minX, y: viewport.minY + innerGap, width: width, height: height)
         frame.origin.x = beforeActive
             ? viewport.minX - width + parkedSliverWidth
             : viewport.maxX - parkedSliverWidth
@@ -4105,15 +4270,96 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         settleExpectedFocusedWindow(if: window)
     }
 
+    /// Asks every column in the active workspace what width it actually ended up with, once the
+    /// layout has had time to land. Apps are free to refuse the width scrollini requests, and the strip
+    /// can only stay tight if it packs against what they granted.
+    private func scheduleColumnMeasurement(after delay: TimeInterval) {
+        columnMeasurementGeneration &+= 1
+        let generation = columnMeasurementGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(delay, 0.02)) { [weak self] in
+            self?.measureColumnWidths(generation: generation)
+        }
+    }
+
+    private func measureColumnWidths(generation: UInt64) {
+        guard generation == columnMeasurementGeneration,
+              animationTimer == nil,
+              !isApplyingLayout,
+              manualResizeElement == nil,
+              trackpadRenderTimer == nil,
+              trackpadMomentumTimer == nil,
+              let workspace = activeWorkspaceObject()
+        else {
+            return
+        }
+
+        let viewport = currentViewport()
+        guard viewport.width > 0 else {
+            return
+        }
+
+        let strip = stripFrames(
+            for: workspace,
+            viewport: viewport,
+            activeColumn: workspace.activeColumn,
+            scrollOffset: workspace.scrollOffset
+        )
+
+        var changed = false
+        for (columnIndex, window) in workspace.columns.enumerated() {
+            let requested = requestedWidth(for: window, viewport: viewport)
+            // Every AX read is an IPC round trip, so keep the steady-state cost to the handful of
+            // columns actually on screen. An off-screen column still gets measured the first time
+            // it is asked for a given width, and again as soon as it scrolls into view.
+            let isVisible = strip.indices.contains(columnIndex) && strip[columnIndex].intersects(viewport)
+            let isUnmeasured = window.measuredForWidth.map { abs($0 - requested) >= 1 } ?? true
+            guard isVisible || isUnmeasured else {
+                continue
+            }
+
+            guard let frame = axFrame(of: window.element), frame.width > 0 else {
+                continue
+            }
+            changed = recordMeasuredWidth(frame.width, requested: requested, for: window) || changed
+        }
+
+        guard changed else {
+            return
+        }
+
+        // Re-packing does not change what any column asks for, so the follow-up measurement this
+        // schedules finds every width already recorded and stops there.
+        debugLog("re-packing strip against measured column widths")
+        projectLayout(focusActiveWindow: false, layoutLockDelay: 0.02, verifyActiveLayout: false)
+    }
+
     private func activeWindowFrameMatchesLayout(_ window: ManagedWindow) -> Bool {
         guard let expectedItem = currentLayoutItem(for: window), expectedItem.visible else {
             return true
         }
-        guard let actualFrame = axFrame(window.element) else {
+        guard let actualFrame = axFrame(of: window.element) else {
             return true
         }
 
-        return framesApproximatelyEqual(actualFrame, expectedItem.frame, tolerance: 2)
+        if framesApproximatelyEqual(actualFrame, expectedItem.frame, tolerance: 2) {
+            return true
+        }
+
+        // The window went where it was told but not to the size it was told. Re-sending the same
+        // frame would only get clamped again, so record what the app granted and let the
+        // measurement pass re-pack the strip around it.
+        let positionMatches = abs(actualFrame.minX - expectedItem.frame.minX) <= 2
+            && abs(actualFrame.minY - expectedItem.frame.minY) <= 2
+        if positionMatches {
+            let viewport = currentViewport()
+            if viewport.width > 0, actualFrame.width > 0 {
+                let requested = requestedWidth(for: window, viewport: viewport)
+                _ = recordMeasuredWidth(actualFrame.width, requested: requested, for: window)
+            }
+            return true
+        }
+
+        return false
     }
 
     private func scheduleActiveLayoutVerification(
@@ -4176,7 +4422,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     private func systemFrameMatchesCurrentLayout(for element: AXUIElement) -> Bool {
         guard let window = tiledWindow(for: element),
               let expectedItem = currentLayoutItem(for: window),
-              let actualFrame = axFrame(element),
+              let actualFrame = axFrame(of: element),
               framesApproximatelyEqual(actualFrame, expectedItem.frame, tolerance: 2)
         else {
             return false
@@ -4613,9 +4859,28 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         tiledWindowLocation(for: element)?.window
     }
 
-    private func updateManualWidthRatio(for element: AXUIElement) -> Bool {
+    /// Inverse of `requestedWidth`, so a width read back off a window maps to the ratio that would
+    /// have asked for it.
+    private func widthRatio(forWidth width: CGFloat, viewport: CGRect) -> CGFloat {
+        let usable = viewport.width - innerGap
+        guard usable > 0 else {
+            return config.defaultWidthRatio.clampedWidthRatio
+        }
+        return ((width + innerGap) / usable).clampedManualWidthRatio
+    }
+
+    /// A resize is only the user's if a mouse button is down for it. macOS also reports a resize
+    /// when an app *refuses* the size scrollini asked for — minimum sizes, character-cell increments,
+    /// a window restoring its own remembered geometry. Treating those as intent is what let every
+    /// window slowly drift to its own arbitrary width and persist it across restarts.
+    private func windowResizeIsUserDriven() -> Bool {
+        CGEventSource.buttonState(.combinedSessionState, button: .left)
+            || CGEventSource.buttonState(.combinedSessionState, button: .right)
+    }
+
+    private func updateManualWidthRatio(for element: AXUIElement, userDriven: Bool) -> Bool {
         guard let location = tiledWindowLocation(for: element),
-              let frame = axFrame(element)
+              let frame = axFrame(of: element)
         else {
             return false
         }
@@ -4629,18 +4894,31 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return false
         }
 
-        let ratio = (frame.width / viewport.width).clampedManualWidthRatio
-        let previousRatio = location.window.manualWidthRatio
+        let window = location.window
+        guard userDriven else {
+            // The app pushed back on the width it was given. Remember what it settled on so the
+            // strip packs against it, but leave the column's configured width alone.
+            let requested = requestedWidth(for: window, viewport: viewport)
+            return recordMeasuredWidth(frame.width, requested: requested, for: window)
+        }
+
+        let ratio = widthRatio(forWidth: frame.width, viewport: viewport)
+        let previousRatio = window.manualWidthRatio
         let oldScrollOffset = location.workspace.scrollOffset
-        location.window.manualWidthRatio = ratio
+        window.manualWidthRatio = ratio
+        // The drag *is* the new request, so any width the app clamped us to before is stale, and
+        // so is any width to un-maximize back to.
+        window.measuredWidth = nil
+        window.measuredForWidth = nil
+        window.preMaximizeWidthRatio = nil
 
         let metrics = stripMetrics(for: location.workspace, viewport: viewport)
         let virtualOrigin = metrics.origins[location.columnIndex]
-        let newScrollOffset = virtualOrigin - (frame.minX - viewport.minX)
+        let newScrollOffset = virtualOrigin + innerGap - (frame.minX - viewport.minX)
 
         location.workspace.scrollOffset = newScrollOffset
         location.workspace.activeColumn = location.columnIndex
-        presentationFrames[ObjectIdentifier(location.window)] = frame
+        presentationFrames[ObjectIdentifier(window)] = frame
 
         if let previousRatio,
            abs(previousRatio - ratio) < 0.005,
@@ -4664,11 +4942,26 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return
         }
 
+        // An app resizing itself is not a drag, so it must not take over the resize path: doing so
+        // would suspend trackpad navigation and hover focus for every window that merely clamps
+        // the width it was handed.
+        guard windowResizeIsUserDriven() else {
+            if updateManualWidthRatio(for: element, userDriven: false) {
+                projectLayout(
+                    focusActiveWindow: false,
+                    layoutLockDelay: 0.02,
+                    snapshotTiming: .deferred,
+                    verifyActiveLayout: false
+                )
+            }
+            return
+        }
+
         manualResizeElement = element
         cancelTimer(&manualResizeEndTimer)
         stopAnimation(clearPresentation: false)
 
-        if updateManualWidthRatio(for: element) {
+        if updateManualWidthRatio(for: element, userDriven: true) {
             projectLayout(
                 focusActiveWindow: false,
                 layoutLockDelay: 0,
@@ -4703,7 +4996,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             cancelTimer(&manualResizeEndTimer)
 
             if manualResizeElement.map({ sameWindow($0, element) }) == true {
-                _ = updateManualWidthRatio(for: element)
+                // Reached only from the user-driven branch above, and the drag may already have
+                // ended by now, so the final width still counts as intent.
+                _ = updateManualWidthRatio(for: element, userDriven: true)
                 projectLayout(
                     focusActiveWindow: false,
                     layoutLockDelay: 0.02,
@@ -4720,7 +5015,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     private func frameWidthDiffersFromLayout(for element: AXUIElement) -> Bool {
         guard let window = tiledWindow(for: element),
-              let frame = axFrame(element)
+              let frame = axFrame(of: element)
         else {
             return false
         }
@@ -4730,8 +5025,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             return false
         }
 
-        let frameRatio = (frame.width / viewport.width).clampedManualWidthRatio
-        return abs(frameRatio - widthRatio(for: window)) >= 0.005
+        // Compared against the width the strip is actually laying this column out at, so a window
+        // an app has clamped does not read as a fresh resize on every move notification.
+        return abs(frame.width - layoutWidth(for: window, viewport: viewport)) >= 1
     }
 
     @discardableResult
@@ -4888,7 +5184,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
                     beginOrContinueManualResize(for: element)
                     return
                 }
-                if let frame = axFrame(element) {
+                if let frame = axFrame(of: element) {
                     presentationFrames[ObjectIdentifier(window)] = frame
                 }
                 projectLayout(focusActiveWindow: false)
@@ -4928,23 +5224,6 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         return (value as! AXUIElement)
     }
 
-    private func axFrame(_ element: AXUIElement) -> CGRect? {
-        var positionRef: CFTypeRef?
-        var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionRef) == .success,
-              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
-              let positionValue = positionRef,
-              let sizeValue = sizeRef
-        else {
-            return nil
-        }
-
-        var point = CGPoint.zero
-        var size = CGSize.zero
-        AXValueGetValue(positionValue as! AXValue, .cgPoint, &point)
-        AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
-        return CGRect(origin: point, size: size)
-    }
 }
 
 private func eventTapCallback(

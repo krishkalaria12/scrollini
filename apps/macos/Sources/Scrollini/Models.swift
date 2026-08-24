@@ -11,6 +11,18 @@ final class ManagedWindow {
     var appName: String
     var title: String
     var manualWidthRatio: CGFloat?
+    /// Width this column had before it was maximized, so maximizing twice toggles back.
+    var preMaximizeWidthRatio: CGFloat?
+
+    /// Width macOS actually granted the last time this window was sized, recorded only when the
+    /// app refused the width it was asked for (minimum sizes, character-cell increments, and so
+    /// on). Columns pack against this so a stubborn app does not leave a hole in the strip, which
+    /// mirrors niri caching each column's real width rather than its requested proportion.
+    var measuredWidth: CGFloat?
+    /// The width that was requested when `measuredWidth` was taken. The measurement is only
+    /// trusted while the request behind it still stands, so changing a column's width always
+    /// re-asks the app instead of reusing a stale clamp.
+    var measuredForWidth: CGFloat?
 
     init(element: AXUIElement, pid: pid_t, windowID: UInt32?, bundleID: String?, appName: String, title: String) {
         self.element = element

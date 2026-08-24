@@ -112,10 +112,19 @@ enum Command {
     case cycleAllWidthPresetsForward
     case nudgeAllWidthsNarrower
     case nudgeAllWidthsWider
+    case maximizeColumnWidth
+    case resetColumnWidth
+}
+
+/// Which way a three-finger swipe committed. niri decides this once per gesture and then drives a
+/// single axis, so a swipe up changes workspace without also dragging the column strip sideways.
+enum TrackpadNavigationAxis {
+    case horizontal
+    case vertical
 }
 
 enum TrackpadNavigationEvent {
     case began
-    case changed(delta: CGPoint, velocity: CGPoint)
-    case ended(velocity: CGPoint)
+    case changed(axis: TrackpadNavigationAxis, delta: CGPoint, velocity: CGPoint)
+    case ended(axis: TrackpadNavigationAxis?, velocity: CGPoint)
 }

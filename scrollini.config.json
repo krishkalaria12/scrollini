@@ -62,11 +62,15 @@
     "cycle_all_width_presets_backward": ["cmd+ctrl+shift+h"],
     "cycle_all_width_presets_forward": ["cmd+ctrl+shift+l"],
     "nudge_all_widths_narrower": ["cmd+ctrl+shift+-"],
-    "nudge_all_widths_wider": ["cmd+ctrl+shift+="]
+    "nudge_all_widths_wider": ["cmd+ctrl+shift+="],
+    "maximize_column_width": ["cmd+ctrl+f"],
+    "reset_column_width": ["cmd+ctrl+r"]
   },
   "trackpad_navigation": true,
   "trackpad_navigation_fingers": 3,
   "trackpad_navigation_sensitivity": 1.6,
+  "trackpad_navigation_workspace_sensitivity": 6.4,
+  "trackpad_navigation_direction_lock_threshold": 0.02,
   "trackpad_navigation_deceleration": 5.5,
   "trackpad_navigation_hover_suppression_ms": 280,
   "trackpad_navigation_momentum_min_velocity": 80,

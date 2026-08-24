@@ -42,12 +42,53 @@ Niri commit inspected: `1f07cffa`
   [monitor.rs lines 537-585](https://github.com/niri-wm/niri/blob/1f07cffa/src/layout/monitor.rs#L537-L585)
   [monitor.rs lines 625-640](https://github.com/niri-wm/niri/blob/1f07cffa/src/layout/monitor.rs#L625-L640)
 
+## Sizing and Gestures
+
+Niri commit inspected: `dd75865`
+
+- A column's proportional width is `(working_width - gaps) * proportion - gaps`,
+  so gaps are reserved space rather than a cosmetic inset and two `0.5` columns
+  tile the working area exactly.
+  [scrolling.rs lines 4532-4541](https://github.com/YaLTeR/niri/blob/dd75865/src/layout/scrolling.rs#L4532-L4541)
+
+- Columns are laid out end to end with one gap between them: `x += width + gaps`.
+  [scrolling.rs lines 2333-2346](https://github.com/YaLTeR/niri/blob/dd75865/src/layout/scrolling.rs#L2333-L2346)
+
+- The width used to place columns is the *cached actual column width*, taken
+  from each tile's expected-or-current size, not the configured proportion. A
+  client that will not take the size it was offered widens its own column and
+  the strip stays packed instead of opening a hole.
+  [scrolling.rs lines 108-111](https://github.com/YaLTeR/niri/blob/dd75865/src/layout/scrolling.rs#L108-L111)
+  [scrolling.rs lines 4843-4852](https://github.com/YaLTeR/niri/blob/dd75865/src/layout/scrolling.rs#L4843-L4852)
+
+- Three-finger swipes are direction-locked. Niri accumulates the swipe until it
+  passes a 16px threshold, then begins *either* the view-offset gesture when
+  `|dx| > |dy|` *or* the workspace-switch gesture otherwise. Only the chosen
+  gesture ever starts, so updates to the other axis are no-ops for the rest of
+  the swipe.
+  [input/mod.rs lines 3994-4030](https://github.com/YaLTeR/niri/blob/dd75865/src/input/mod.rs#L3994-L4030)
+
+- The two axes are deliberately not equally sensitive: one workspace is 300
+  units of touchpad travel, while one screen width of column scrolling is 1200.
+  [monitor.rs line 37](https://github.com/YaLTeR/niri/blob/dd75865/src/layout/monitor.rs#L37)
+  [scrolling.rs line 32](https://github.com/YaLTeR/niri/blob/dd75865/src/layout/scrolling.rs#L32)
+
 ## MVP Mapping
 
 - `Cmd+1..9`: focus dynamic workspace index, clamped to the last empty row.
 - `Cmd+J/K`: focus workspace down/up.
 - `Cmd+H/L`: focus column left/right.
 - Every managed window is a single full-screen-sized column.
+- Column widths use Niri's proportional formula and gap packing directly.
+- macOS cannot force a window to a size its app refuses, so scrollini measures what
+  each window was actually granted after a layout settles and packs the strip
+  against that, which is the same quantity Niri caches per column.
+- An AX resize notification only counts as the user's intent when a mouse button
+  is down for it. Everything else — an app clamping to a minimum size, a
+  terminal snapping to a character cell — is recorded as a measurement and does
+  not rewrite the column's configured width.
+- Three-finger swipes take Niri's direction lock, including its asymmetric
+  vertical sensitivity.
 - The current workspace and column projects to the visible macOS frame.
 - Other windows remain physically parked just past a side edge so Cmd-Tab can
   still find them and macOS does not relocate fully offscreen windows.

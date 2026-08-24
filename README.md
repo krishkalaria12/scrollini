@@ -47,6 +47,13 @@ terminal app itself to get those permissions.
   compositor.
 - Makes each column `0.8` screen widths by default, so the next column can peek
   in while you move sideways.
+- Sizes columns with Niri's proportional formula, so `inner_gap` is reserved
+  space rather than a cosmetic inset and two `0.5` columns tile the screen
+  exactly, gaps included.
+- Packs the strip against the width each window actually accepted. Apps with
+  minimum sizes or character-cell width increments cannot always take the width
+  they are asked for, and packing against the requested width would leave a band
+  of empty desktop beside every one of them.
 - Centers the focused column when possible, while keeping the first column
   pinned to the left edge.
 - Tracks `Cmd+Tab`, app launches, app exits, manual window resizes, and focused
@@ -81,7 +88,10 @@ terminal app itself to get those permissions.
 | `Cmd+Ctrl+-` / `Cmd+Ctrl+=` | Nudge active column width |
 | `Cmd+Ctrl+Shift+H` / `Cmd+Ctrl+Shift+L` | Cycle every tiled window width preset |
 | `Cmd+Ctrl+Shift+-` / `Cmd+Ctrl+Shift+=` | Nudge every tiled window width |
-| three-finger trackpad swipe | Navigate columns / workspaces |
+| `Cmd+Ctrl+F` | Maximize the active column, or restore its previous width |
+| `Cmd+Ctrl+R` | Reset the active column to its configured width |
+| three-finger swipe left / right | Scroll through columns |
+| three-finger swipe up / down | Switch workspace |
 
 Everything else passes through. The default config excludes `Cmd+Shift+5`, so
 macOS screen recording keeps working.
@@ -90,6 +100,14 @@ Trackpad navigation uses Apple's private MultitouchSupport framework so Scrollin
 see raw three-finger movement without stealing normal two-finger scrolling. It
 moves a continuous camera with momentum, then focuses the workspace and column
 nearest the camera when the motion settles.
+
+Like Niri, a swipe commits to one axis and stays there. Scrollini waits until the
+fingers have travelled `trackpad_navigation_direction_lock_threshold` of the
+trackpad, picks horizontal or vertical from whichever way they moved further,
+and drives only that axis for the rest of the gesture — so a swipe up switches
+workspace without also dragging the column strip sideways. Vertical movement is
+more sensitive than horizontal by default, matching Niri's ratio of one
+workspace per quarter of the travel it takes to scroll one screen width.
 
 ## Config
 
@@ -148,6 +166,8 @@ The repo includes a full default config. A compact version looks like this:
   "trackpad_navigation": true,
   "trackpad_navigation_fingers": 3,
   "trackpad_navigation_sensitivity": 1.6,
+  "trackpad_navigation_workspace_sensitivity": 6.4,
+  "trackpad_navigation_direction_lock_threshold": 0.02,
   "trackpad_navigation_deceleration": 5.5,
   "trackpad_navigation_hover_suppression_ms": 280,
   "trackpad_navigation_momentum_min_velocity": 80,
@@ -190,6 +210,16 @@ Useful string settings:
   `after_active`, or `end`
 - `trackpad_navigation_snap`: `nearest_column`, `nearest_visible`, or `none`
 - `hide_method`: `skylight_alpha` or `park_only`
+
+Useful trackpad numbers:
+
+- `trackpad_navigation_sensitivity`: screen widths of column scrolling per full
+  swipe across the trackpad
+- `trackpad_navigation_workspace_sensitivity`: workspaces per full swipe. Unset,
+  it follows `trackpad_navigation_sensitivity * 4`, which is Niri's ratio
+- `trackpad_navigation_direction_lock_threshold`: fraction of the trackpad a
+  swipe must cross before it commits to an axis. Raise it if swipes pick the
+  wrong direction, lower it if they feel slow to catch on
 
 Rules can match on `bundle_id`, `app_name`, or `title_contains`. Use
 `behavior: "ignore"` for windows scrollini should leave alone, `behavior: "float"`

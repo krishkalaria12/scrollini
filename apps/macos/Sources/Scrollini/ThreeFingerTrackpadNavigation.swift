@@ -89,11 +89,16 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         var lastCentroid = CGPoint.zero
         var lastTimestamp: CFAbsoluteTime = 0
         var velocity = CGPoint.zero
+        /// Travel since the gesture started, used to pick an axis once and then stay on it.
+        var cumulative = CGPoint.zero
+        /// `nil` until the swipe has moved far enough to say which way it is going.
+        var axis: TrackpadNavigationAxis?
     }
 
     private let fingers: Int
     private let invertX: Bool
     private let invertY: Bool
+    private let directionLockThreshold: CGFloat
     private let onEvent: (TrackpadNavigationEvent) -> Void
     private let lock = NSLock()
     private var state = GestureState()
@@ -107,11 +112,13 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         fingers: Int,
         invertX: Bool,
         invertY: Bool,
+        directionLockThreshold: CGFloat,
         onEvent: @escaping (TrackpadNavigationEvent) -> Void
     ) {
         self.fingers = fingers
         self.invertX = invertX
         self.invertY = invertY
+        self.directionLockThreshold = max(directionLockThreshold, 0.0001)
         self.onEvent = onEvent
     }
 
@@ -192,6 +199,8 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
             state.lastCentroid = centroid
             state.lastTimestamp = now
             state.velocity = .zero
+            state.cumulative = .zero
+            state.axis = nil
             return .began
         }
 
@@ -211,13 +220,46 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
             return nil
         }
 
+        state.cumulative.x += deltaX
+        state.cumulative.y += deltaY
+
+        // Hold everything back until the swipe has travelled far enough to read as deliberate,
+        // then commit to whichever axis it favours and release the travel banked so far. This is
+        // niri's direction lock: no finger is perfectly straight, and without it every swipe up
+        // also drags the column strip sideways.
+        let axis: TrackpadNavigationAxis
+        if let lockedAxis = state.axis {
+            axis = lockedAxis
+        } else {
+            let travel = state.cumulative
+            guard hypot(travel.x, travel.y) >= directionLockThreshold else {
+                return nil
+            }
+
+            axis = abs(travel.x) > abs(travel.y) ? .horizontal : .vertical
+            state.axis = axis
+            deltaX = travel.x
+            deltaY = travel.y
+        }
+
         let instantVelocity = CGPoint(x: deltaX / elapsed, y: deltaY / elapsed)
         state.velocity = CGPoint(
             x: state.velocity.x * 0.65 + instantVelocity.x * 0.35,
             y: state.velocity.y * 0.65 + instantVelocity.y * 0.35
         )
 
-        return .changed(delta: CGPoint(x: deltaX, y: deltaY), velocity: state.velocity)
+        let delta: CGPoint
+        let velocity: CGPoint
+        switch axis {
+        case .horizontal:
+            delta = CGPoint(x: deltaX, y: 0)
+            velocity = CGPoint(x: state.velocity.x, y: 0)
+        case .vertical:
+            delta = CGPoint(x: 0, y: deltaY)
+            velocity = CGPoint(x: 0, y: state.velocity.y)
+        }
+
+        return .changed(axis: axis, delta: delta, velocity: velocity)
     }
 
     private func centroid(of touches: UnsafeMutablePointer<MTTouch>, count: Int) -> CGPoint {
@@ -238,9 +280,20 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
             return nil
         }
 
-        let velocity = state.velocity
+        let axis = state.axis
+        let velocity: CGPoint
+        switch axis {
+        case .horizontal:
+            velocity = CGPoint(x: state.velocity.x, y: 0)
+        case .vertical:
+            velocity = CGPoint(x: 0, y: state.velocity.y)
+        case nil:
+            // Never committed to an axis, so there is no motion to carry into momentum.
+            velocity = .zero
+        }
+
         resetGesture()
-        return .ended(velocity: velocity)
+        return .ended(axis: axis, velocity: velocity)
     }
 
     private func resetGesture() {
@@ -248,5 +301,7 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         state.lastCentroid = .zero
         state.lastTimestamp = 0
         state.velocity = .zero
+        state.cumulative = .zero
+        state.axis = nil
     }
 }

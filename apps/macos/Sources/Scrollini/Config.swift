@@ -83,6 +83,8 @@ struct ScrolliniConfig: Codable {
     var trackpadNavigation: Bool?
     var trackpadNavigationFingers: Int?
     var trackpadNavigationSensitivity: CGFloat?
+    var trackpadNavigationWorkspaceSensitivity: CGFloat?
+    var trackpadNavigationDirectionLockThreshold: CGFloat?
     var trackpadNavigationDeceleration: CGFloat?
     var trackpadNavigationHoverSuppressionMS: Int?
     var trackpadNavigationMomentumMinVelocity: CGFloat?
@@ -128,6 +130,8 @@ struct ScrolliniConfig: Codable {
         trackpadNavigation: true,
         trackpadNavigationFingers: 3,
         trackpadNavigationSensitivity: 1.6,
+        trackpadNavigationWorkspaceSensitivity: 6.4,
+        trackpadNavigationDirectionLockThreshold: 0.02,
         trackpadNavigationDeceleration: 5.5,
         trackpadNavigationHoverSuppressionMS: 280,
         trackpadNavigationMomentumMinVelocity: 80,
@@ -187,6 +191,8 @@ struct ScrolliniConfig: Codable {
         "cycle_all_width_presets_forward": ["cmd+ctrl+shift+l"],
         "nudge_all_widths_narrower": ["cmd+ctrl+shift+-"],
         "nudge_all_widths_wider": ["cmd+ctrl+shift+="],
+        "maximize_column_width": ["cmd+ctrl+f"],
+        "reset_column_width": ["cmd+ctrl+r"],
     ]
 
     static func load() -> ScrolliniConfig {
@@ -268,6 +274,10 @@ struct ScrolliniConfig: Codable {
         config.parkedSliverWidth = config.parkedSliverWidth.map { min(max($0, 0), 32) }
         config.trackpadNavigationFingers = config.trackpadNavigationFingers.map { min(max($0, 2), 5) }
         config.trackpadNavigationSensitivity = config.trackpadNavigationSensitivity.map { min(max($0, 0.1), 20) }
+        config.trackpadNavigationWorkspaceSensitivity = config.trackpadNavigationWorkspaceSensitivity
+            .map { min(max($0, 0.1), 40) }
+        config.trackpadNavigationDirectionLockThreshold = config.trackpadNavigationDirectionLockThreshold
+            .map { min(max($0, 0.001), 0.5) }
         config.trackpadNavigationDeceleration = config.trackpadNavigationDeceleration.map { min(max($0, 1), 30) }
         config.trackpadNavigationHoverSuppressionMS = config.trackpadNavigationHoverSuppressionMS.map { min(max($0, 0), 2000) }
         config.trackpadNavigationMomentumMinVelocity = config.trackpadNavigationMomentumMinVelocity.map { min(max($0, 0), 5000) }
@@ -352,6 +362,8 @@ struct ScrolliniConfig: Codable {
         case trackpadNavigation = "trackpad_navigation"
         case trackpadNavigationFingers = "trackpad_navigation_fingers"
         case trackpadNavigationSensitivity = "trackpad_navigation_sensitivity"
+        case trackpadNavigationWorkspaceSensitivity = "trackpad_navigation_workspace_sensitivity"
+        case trackpadNavigationDirectionLockThreshold = "trackpad_navigation_direction_lock_threshold"
         case trackpadNavigationDeceleration = "trackpad_navigation_deceleration"
         case trackpadNavigationHoverSuppressionMS = "trackpad_navigation_hover_suppression_ms"
         case trackpadNavigationMomentumMinVelocity = "trackpad_navigation_momentum_min_velocity"
