@@ -1,0 +1,141 @@
+import AppKit
+import ApplicationServices
+import CoreGraphics
+import Darwin
+import Foundation
+import SwiftUI
+
+extension Scrollini {
+    func runMainLoop() {
+        guard statusItem != nil, Thread.isMainThread else {
+            RunLoop.main.run()
+            return
+        }
+
+        MainActor.assumeIsolated {
+            NSApplication.shared.run()
+        }
+    }
+
+    func makeMainTimer(
+        deadline: DispatchTime,
+        repeating interval: DispatchTimeInterval? = nil,
+        leeway: DispatchTimeInterval = .milliseconds(2),
+        handler: @escaping () -> Void
+    ) -> DispatchSourceTimer {
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        if let interval {
+            timer.schedule(deadline: deadline, repeating: interval, leeway: leeway)
+        } else {
+            timer.schedule(deadline: deadline, leeway: leeway)
+        }
+        timer.setEventHandler(handler: handler)
+        timer.resume()
+        return timer
+    }
+
+    func cancelTimer(_ timer: inout DispatchSourceTimer?) {
+        timer?.cancel()
+        timer = nil
+    }
+
+    func scheduleRescanTimer() {
+        rescanTimer?.invalidate()
+        rescanTimer = Timer.scheduledTimer(withTimeInterval: rescanInterval, repeats: true) { [weak self] _ in
+            self?.handlePeriodicTick()
+        }
+    }
+
+    func handlePeriodicTick() {
+        guard !reloadConfigIfNeeded() else {
+            return
+        }
+        let wasTransient = transientWindowActive
+        guard !transientSystemWindowIsActive(forceRefresh: true) else {
+            cancelHoverFocus()
+            clearTrackpadCamera()
+            return
+        }
+        rescanWindows(adoptFocused: wasTransient)
+    }
+    func requestAccessibilityPermission() -> Bool {
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
+    func observeWorkspace() {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            self,
+            selector: #selector(applicationActivated(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(applicationLaunched(_:)),
+            name: NSWorkspace.didLaunchApplicationNotification,
+            object: nil
+        )
+        center.addObserver(
+            self,
+            selector: #selector(applicationTerminated(_:)),
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil
+        )
+    }
+
+    func installTerminationHandlers() {
+        for sig in [SIGINT, SIGTERM, SIGHUP, SIGQUIT] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { [weak self] in
+                if self?.restoreOnExit == true {
+                    self?.restoreManagedWindowsForExit()
+                }
+                exit(0)
+            }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
+    func startCleanupWatcher() {
+        guard let executableURL = currentExecutableURL() else {
+            return
+        }
+
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = [
+            "--cleanup-watch",
+            "\(ProcessInfo.processInfo.processIdentifier)",
+            restoreStateURL.path,
+        ]
+
+        if let null = FileHandle(forWritingAtPath: "/dev/null") {
+            process.standardOutput = null
+            process.standardError = null
+        }
+
+        do {
+            try process.run()
+            cleanupWatcher = process
+        } catch {
+            fputs("scrollini: failed to start cleanup watcher: \(error)\n", stderr)
+        }
+    }
+    func updateCleanupWatcher(previousRestoreOnExit: Bool) {
+        guard restoreOnExit != previousRestoreOnExit else {
+            return
+        }
+
+        if restoreOnExit {
+            startCleanupWatcher()
+        } else {
+            cleanupWatcher?.terminate()
+            cleanupWatcher = nil
+            try? FileManager.default.removeItem(at: restoreStateURL)
+        }
+    }
+}
