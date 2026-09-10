@@ -12,5 +12,10 @@ let package = Package(
             name: "Scrollini",
             path: "Sources/Scrollini"
         ),
+        .testTarget(
+            name: "ScrolliniTests",
+            dependencies: ["Scrollini"],
+            path: "Tests"
+        ),
     ]
 )
