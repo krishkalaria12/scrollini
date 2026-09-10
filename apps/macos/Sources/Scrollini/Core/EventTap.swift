@@ -82,6 +82,19 @@ extension Scrollini {
         frontmostAppName = app?.localizedName
     }
 
+    func setKeybindingsPaused(_ paused: Bool) {
+        guard keybindingsPaused != paused else {
+            return
+        }
+        keybindingsPaused = paused
+        if paused {
+            flushPendingColumnNavigation()
+            flushColumnNavigationProjection(animated: false)
+            cancelColumnNavigationFocus()
+        }
+        updateStatusItem()
+    }
+
     func handleKeyEvent(_ event: CGEvent, type: CGEventType) -> Bool {
         let modifiers = event.flags.intersection([.maskCommand, .maskShift, .maskControl, .maskAlternate, .maskSecondaryFn])
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
@@ -90,6 +103,10 @@ extension Scrollini {
             return swallowedKeyUps.remove(keyCode) != nil
         }
         swallowedKeyUps.remove(keyCode)
+
+        guard !keybindingsPaused else {
+            return false
+        }
 
         guard !transientSystemWindowIsActive() else {
             return false

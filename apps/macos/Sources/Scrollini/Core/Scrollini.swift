@@ -62,6 +62,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     /// put a cross-process lookup in the hot path.
     var frontmostAppBundleID: String?
     var frontmostAppName: String?
+    var keybindingsPaused = false
     var scheduledRescanTimer: DispatchSourceTimer?
     var scheduledRescanAdoptFocused = false
     var scheduledRescanProjectLayout = false

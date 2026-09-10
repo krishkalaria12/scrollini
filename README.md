@@ -60,7 +60,7 @@ terminal app itself to get those permissions.
   windows so the model follows macOS instead of fighting it.
 - Supports app rules for tiled, floating, and ignored windows.
 - Adds a graphical menu bar status item with workspace/window status, settings
-  shortcuts, layout reapply, and safe quit.
+  shortcuts, layout reapply, a keybinding pause toggle, and safe quit.
 - Hot-reloads config changes without restarting, keeping the previous config if
   a saved file cannot be parsed.
 - Persists workspace, column order, manual widths, and focused window across
@@ -221,6 +221,11 @@ Those chords now reach Safari and keep working everywhere else. Rule exclusions 
 checked against the frontmost application on every keystroke, so the rule needs a
 `bundle_id` or an `app_name`; a rule with only `title_contains` is ignored for this
 and logs a warning. Every matching rule contributes, so ordering does not matter.
+
+When a shortcut is fighting an app and you want it back right now, the menu bar has
+**Pause Keybindings**. Pausing stops scrollini claiming keystrokes and nothing else:
+the strip keeps its layout, the trackpad keeps scrolling columns, and windows stay
+where they are.
 
 See `scrollini.config.json` for the full command-name list.
 

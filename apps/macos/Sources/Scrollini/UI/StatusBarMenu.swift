@@ -85,6 +85,12 @@ extension Scrollini {
                 systemImage: "pause.circle"
             )))
         }
+        if snapshot.keybindingsPaused {
+            menu.addItem(ScrolliniMenuItemFactory.makeItem(for: ScrolliniMenuBannerView(
+                message: "Keybindings are paused. Every shortcut goes straight to the focused app.",
+                systemImage: "keyboard.badge.ellipsis"
+            )))
+        }
         menu.addItem(ScrolliniMenuItemFactory.makeItem(for: ScrolliniMenuDividerView()))
 
         addMenuItem(
@@ -128,6 +134,12 @@ extension Scrollini {
             action: #selector(reapplyLayoutFromStatusItem),
             to: menu
         )
+        addMenuItem(
+            snapshot.keybindingsPaused ? "Resume Keybindings" : "Pause Keybindings",
+            systemImage: snapshot.keybindingsPaused ? "play.circle" : "pause.circle",
+            action: #selector(toggleKeybindingsPausedFromStatusItem),
+            to: menu
+        )
 
         menu.addItem(ScrolliniMenuItemFactory.makeItem(for: ScrolliniMenuDividerView()))
         addMenuItem("Quit Scrollini", systemImage: "power", action: #selector(quitFromStatusItem), to: menu)
@@ -152,7 +164,8 @@ extension Scrollini {
             settingsPath: abbreviatedPath(settingsURL),
             layoutStatePath: persistLayoutEnabled ? abbreviatedPath(persistentLayoutStateURL) : nil,
             layoutStateExists: FileManager.default.fileExists(atPath: persistentLayoutStateURL.path),
-            transientSystemDialogActive: transientWindowActive
+            transientSystemDialogActive: transientWindowActive,
+            keybindingsPaused: keybindingsPaused
         )
     }
 
@@ -251,6 +264,13 @@ extension Scrollini {
         rescanWindows(adoptFocused: false)
         projectLayout(focusActiveWindow: false)
         updateStatusItem()
+    }
+
+    /// Paused only means scrollini stops claiming keystrokes. The strip keeps its layout and the
+    /// trackpad keeps working, so this is the escape hatch for a chord fighting the focused app,
+    /// not a way to hand every window back.
+    @objc func toggleKeybindingsPausedFromStatusItem() {
+        setKeybindingsPaused(!keybindingsPaused)
     }
 
     @objc func quitFromStatusItem() {

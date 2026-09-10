@@ -10,6 +10,7 @@ struct ScrolliniMenuSnapshot {
     var layoutStatePath: String?
     var layoutStateExists: Bool
     var transientSystemDialogActive: Bool
+    var keybindingsPaused: Bool
 }
 
 enum ScrolliniMenuMetrics {
@@ -127,7 +128,7 @@ struct ScrolliniMenuHeaderView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     Text("Scrollini")
                         .font(.subheadline.weight(.semibold))
-                    Text(snapshot.transientSystemDialogActive ? "Paused" : "Running")
+                    Text(statusLabel)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -143,6 +144,13 @@ struct ScrolliniMenuHeaderView: View {
         .padding(.horizontal, ScrolliniMenuMetrics.horizontalPadding)
         .padding(.top, 10)
         .padding(.bottom, 6)
+    }
+
+    private var statusLabel: String {
+        if snapshot.transientSystemDialogActive {
+            return "Paused"
+        }
+        return snapshot.keybindingsPaused ? "Keys paused" : "Running"
     }
 
     private var activeSummary: String {
