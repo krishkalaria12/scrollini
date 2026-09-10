@@ -132,8 +132,18 @@ The loaded config file is watched for changes. Saving valid JSON reloads
 keybindings, rules, layout settings, animations, and trackpad settings in place.
 If a save cannot be parsed, scrollini keeps running with the previous config.
 The menu bar item can open or reveal the loaded settings file, reveal the saved
-layout state file, reload settings, reapply the layout, and quit while restoring
-tiled windows.
+layout state file, reload settings, reapply the layout, pause and resume
+keybindings, and quit while restoring tiled windows.
+
+Every key is optional, so a config file only has to list what it changes. An
+omitted key keeps its built-in default, which means `{}` is a valid config and
+
+```json
+{ "inner_gap": 20 }
+```
+
+is a complete one. `rules` works the same way, with one wrinkle: leaving it out
+inherits the built-in rules, while an explicit `"rules": []` clears them.
 
 The repo includes a full default config. A compact version looks like this:
 

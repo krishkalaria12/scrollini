@@ -126,17 +126,14 @@ struct ScrolliniSettingsView: View {
                 HStack {
                     Text("Default width")
                     Spacer()
-                    Text("\(Int(store.config.defaultWidthRatio * 100))%")
+                    Text("\(Int(store.resolvedDefaultWidthRatio * 100))%")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
                 Slider(
-                    value: Binding(
-                        get: { store.config.defaultWidthRatio },
-                        set: {
-                            store.config.defaultWidthRatio = $0.clampedWidthRatio
-                            store.scheduleSave()
-                        }
+                    value: optionalCGFloatBinding(
+                        \.defaultWidthRatio,
+                        fallback: ScrolliniConfig.fallback.defaultWidthRatio ?? 0.8
                     ),
                     in: 0.2 ... 2.0,
                     step: 0.05

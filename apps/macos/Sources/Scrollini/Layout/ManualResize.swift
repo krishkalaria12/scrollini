@@ -11,7 +11,7 @@ extension Scrollini {
     func widthRatio(forWidth width: CGFloat, viewport: CGRect) -> CGFloat {
         let usable = viewport.width - innerGap
         guard usable > 0 else {
-            return config.defaultWidthRatio.clampedWidthRatio
+            return defaultWidthRatio
         }
         return ((width + innerGap) / usable).clampedManualWidthRatio
     }

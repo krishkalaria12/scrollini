@@ -59,7 +59,7 @@ extension Scrollini {
     }
 
     func makeAppKeybindingExclusions() -> [AppKeybindingExclusion] {
-        config.rules.compactMap { rule in
+        windowRules.compactMap { rule in
             guard let bindings = rule.excludedKeybindings, !bindings.isEmpty else {
                 return nil
             }

@@ -55,7 +55,7 @@ enum ScrolliniConfigLoadResult {
 }
 
 struct ScrolliniConfig: Codable {
-    var defaultWidthRatio: CGFloat
+    var defaultWidthRatio: CGFloat?
     var presetWidthRatios: [CGFloat]?
     var animationDurationMS: Int?
     var keyboardAnimationMS: Int?
@@ -99,7 +99,7 @@ struct ScrolliniConfig: Codable {
     var statePath: String?
     var hideMethod: HideMethod?
     var debugLogging: Bool?
-    var rules: [WindowRule]
+    var rules: [WindowRule]?
 
     static let fallback = ScrolliniConfig(
         defaultWidthRatio: 0.8,
@@ -263,7 +263,7 @@ struct ScrolliniConfig: Codable {
 
     static func normalize(_ loadedConfig: ScrolliniConfig) -> ScrolliniConfig {
         var config = loadedConfig
-        config.defaultWidthRatio = config.defaultWidthRatio.clampedWidthRatio
+        config.defaultWidthRatio = config.defaultWidthRatio.map(\.clampedWidthRatio)
         config.presetWidthRatios = normalizeWidthPresets(config.presetWidthRatios)
         config.animationDurationMS = config.animationDurationMS.map { min(max($0, 0), 500) }
         config.keyboardAnimationMS = config.keyboardAnimationMS.map { min(max($0, 0), 500) }
@@ -291,11 +291,13 @@ struct ScrolliniConfig: Codable {
         config.trackpadNavigationVelocityGain = config.trackpadNavigationVelocityGain.map { min(max($0, 0), 5) }
         config.trackpadNavigationSettleAnimationMS = config.trackpadNavigationSettleAnimationMS.map { min(max($0, 0), 500) }
         config.rescanIntervalMS = config.rescanIntervalMS.map { min(max($0, 100), 5000) }
-        config.rules = config.rules.map { rule in
-            var rule = rule
-            rule.widthRatio = rule.widthRatio.map(\.clampedWidthRatio)
-            rule.workspace = rule.workspace.map { min(max($0, 1), 99) }
-            return rule
+        config.rules = config.rules.map { rules in
+            rules.map { rule in
+                var rule = rule
+                rule.widthRatio = rule.widthRatio.map(\.clampedWidthRatio)
+                rule.workspace = rule.workspace.map { min(max($0, 1), 99) }
+                return rule
+            }
         }
         return config
     }

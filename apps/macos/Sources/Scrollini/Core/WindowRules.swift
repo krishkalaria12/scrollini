@@ -11,16 +11,16 @@ extension Scrollini {
             return manualWidthRatio.clampedManualWidthRatio
         }
 
-        for rule in config.rules where rule.matches(window) {
+        for rule in windowRules where rule.matches(window) {
             if let widthRatio = rule.widthRatio {
                 return widthRatio.clampedWidthRatio
             }
         }
-        return config.defaultWidthRatio.clampedWidthRatio
+        return defaultWidthRatio
     }
 
     func behavior(for window: ManagedWindow) -> WindowBehavior {
-        for rule in config.rules where rule.matches(window) {
+        for rule in windowRules where rule.matches(window) {
             if let behavior = rule.behavior {
                 return behavior
             }
@@ -29,7 +29,7 @@ extension Scrollini {
     }
 
     func rule(for window: ManagedWindow) -> WindowRule? {
-        config.rules.first { $0.matches(window) }
+        windowRules.first { $0.matches(window) }
     }
 
     func hoverToFocusAllowed(for window: ManagedWindow) -> Bool {

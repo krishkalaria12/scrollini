@@ -6,6 +6,17 @@ import Foundation
 import SwiftUI
 
 extension Scrollini {
+    /// `default_width_ratio` and `rules` are optional like every other setting, so a config file
+    /// can list only the keys it cares about. An omitted key inherits the built-in default; an
+    /// explicit `"rules": []` means no rules.
+    var defaultWidthRatio: CGFloat {
+        (config.defaultWidthRatio ?? ScrolliniConfig.fallback.defaultWidthRatio ?? 0.8).clampedWidthRatio
+    }
+
+    var windowRules: [WindowRule] {
+        config.rules ?? ScrolliniConfig.fallback.rules ?? []
+    }
+
     var animationDuration: TimeInterval {
         TimeInterval(config.animationDurationMS ?? ScrolliniConfig.fallback.animationDurationMS ?? 240) / 1000
     }

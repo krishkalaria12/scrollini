@@ -85,8 +85,14 @@ final class ScrolliniSettingsStore: ObservableObject {
         onRevealState()
     }
 
+    /// The settings UI edits the raw config, where `default_width_ratio` may be absent. Presets
+    /// still need a concrete number to seed from and fall back to.
+    var resolvedDefaultWidthRatio: CGFloat {
+        (config.defaultWidthRatio ?? ScrolliniConfig.fallback.defaultWidthRatio ?? 0.8).clampedWidthRatio
+    }
+
     func addPreset() {
-        let next = min((presetRatios.last ?? config.defaultWidthRatio) + 0.1, 2.0)
+        let next = min((presetRatios.last ?? resolvedDefaultWidthRatio) + 0.1, 2.0)
         presetRatios.append(next.clampedManualWidthRatio)
         scheduleSave()
     }
@@ -104,7 +110,7 @@ final class ScrolliniSettingsStore: ObservableObject {
         Binding(
             get: {
                 guard self.presetRatios.indices.contains(index) else {
-                    return self.config.defaultWidthRatio
+                    return self.resolvedDefaultWidthRatio
                 }
                 return self.presetRatios[index]
             },
