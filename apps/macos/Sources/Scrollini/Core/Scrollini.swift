@@ -24,6 +24,24 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         var recoverable: Bool
     }
 
+    /// A rule's key exclusions, normalized once at config load so the event tap does no string
+    /// parsing per keystroke.
+    struct AppKeybindingExclusion {
+        var bundleID: String?
+        var appName: String?
+        var chords: Set<String>
+
+        func matches(bundleID candidateBundleID: String?, appName candidateAppName: String?) -> Bool {
+            if let bundleID, bundleID != candidateBundleID {
+                return false
+            }
+            if let appName, appName != candidateAppName {
+                return false
+            }
+            return true
+        }
+    }
+
     var loadedConfig = ScrolliniConfig.loadWithMetadata()
     var config: ScrolliniConfig {
         loadedConfig.config
@@ -38,6 +56,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var swallowedKeyUps = Set<Int64>()
     var commandByKeybinding: [String: Command] = [:]
     var excludedKeybindingSet = Set<String>()
+    var appKeybindingExclusions: [AppKeybindingExclusion] = []
+    /// Frontmost app identity, cached from workspace activation notifications. Reading
+    /// `NSWorkspace.shared.frontmostApplication` on the event tap thread for every key down would
+    /// put a cross-process lookup in the hot path.
+    var frontmostAppBundleID: String?
+    var frontmostAppName: String?
     var scheduledRescanTimer: DispatchSourceTimer?
     var scheduledRescanAdoptFocused = false
     var scheduledRescanProjectLayout = false
@@ -122,6 +146,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
         print("scrollini: running")
         print("scrollini: loaded \(commandByKeybinding.count) keybindings")
+        if !appKeybindingExclusions.isEmpty {
+            print("scrollini: \(appKeybindingExclusions.count) app rule(s) reserve keybindings for themselves")
+        }
         if trackpadNavigationEnabled {
             if trackpadNavigation != nil {
                 print("scrollini: three-finger trackpad swipe navigates columns/workspaces")

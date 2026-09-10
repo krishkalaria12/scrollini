@@ -206,7 +206,21 @@ time. Set an action to `[]` to disable it.
 `excluded_keybindings` always wins over `keybindings` and is the escape hatch for
 rebinding into territory macOS or an app already owns. Nothing in the defaults needs
 it, but if you move a binding onto, say, `cmd+shift+4`, add the chord there to hand
-it back to the system. Note that the exclusion is global rather than per-app.
+it back to the system.
+
+A top-level `excluded_keybindings` gives a chord up everywhere. To give one up in a
+single app, put `excluded_keybindings` on a rule instead:
+
+```json
+"rules": [
+  { "bundle_id": "com.apple.Safari", "excluded_keybindings": ["ctrl+alt+left", "ctrl+alt+right"] }
+]
+```
+
+Those chords now reach Safari and keep working everywhere else. Rule exclusions are
+checked against the frontmost application on every keystroke, so the rule needs a
+`bundle_id` or an `app_name`; a rule with only `title_contains` is ignored for this
+and logs a warning. Every matching rule contributes, so ordering does not matter.
 
 See `scrollini.config.json` for the full command-name list.
 
@@ -243,7 +257,7 @@ Rules can match on `bundle_id`, `app_name`, or `title_contains`. Use
 `behavior: "ignore"` for windows scrollini should leave alone, `behavior: "float"`
 for visible untiled windows that should be raised above tiled columns, and
 `width_ratio` to override an app's default column width. Rules can also set `workspace`, `open_position`,
-`trackpad_navigation`, and `hover_to_focus` for matching windows.
+`trackpad_navigation`, `hover_to_focus`, and `excluded_keybindings` for matching windows.
 
 With `persist_layout` enabled, scrollini writes a local layout snapshot to
 `$XDG_STATE_HOME/scrollini/layout.json` or `~/.local/state/scrollini/layout.json`. Set

@@ -127,17 +127,34 @@ extension Scrollini {
     }
 
     func isExcludedKeybinding(modifiers: CGEventFlags, keyCode: Int64, keyText: String) -> Bool {
-        guard !excludedKeybindingSet.isEmpty else {
+        let appExcluded = frontmostAppExcludedChords()
+        guard !excludedKeybindingSet.isEmpty || !appExcluded.isEmpty else {
             return false
         }
 
         for candidate in normalizedKeybindingCandidates(modifiers: modifiers, keyCode: keyCode, keyText: keyText) {
-            if excludedKeybindingSet.contains(candidate) {
+            if excludedKeybindingSet.contains(candidate) || appExcluded.contains(candidate) {
                 return true
             }
         }
 
         return false
+    }
+
+    /// Union of the exclusions every rule matching the frontmost app declares. Rules do not
+    /// shadow each other here the way `behavior(for:)` lets the first match win, because handing
+    /// a chord back to the app it belongs to should never depend on rule ordering.
+    func frontmostAppExcludedChords() -> Set<String> {
+        guard !appKeybindingExclusions.isEmpty else {
+            return []
+        }
+
+        var chords = Set<String>()
+        for exclusion in appKeybindingExclusions
+        where exclusion.matches(bundleID: frontmostAppBundleID, appName: frontmostAppName) {
+            chords.formUnion(exclusion.chords)
+        }
+        return chords
     }
 
     func normalizedKeybindingCandidates(modifiers: CGEventFlags, keyCode: Int64, keyText: String) -> [String] {

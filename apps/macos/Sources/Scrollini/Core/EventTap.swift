@@ -54,6 +54,32 @@ extension Scrollini {
         commandByKeybinding = makeCommandByKeybinding()
         excludedKeybindingSet = Set((config.excludedKeybindings ?? ScrolliniConfig.fallback.excludedKeybindings ?? [])
             .compactMap(normalizedKeybinding(_:)))
+        appKeybindingExclusions = makeAppKeybindingExclusions()
+        refreshFrontmostApplication()
+    }
+
+    func makeAppKeybindingExclusions() -> [AppKeybindingExclusion] {
+        config.rules.compactMap { rule in
+            guard let bindings = rule.excludedKeybindings, !bindings.isEmpty else {
+                return nil
+            }
+            guard rule.bundleID != nil || rule.appName != nil else {
+                fputs("scrollini: ignoring rule excluded_keybindings without a bundle_id or app_name\n", stderr)
+                return nil
+            }
+
+            let chords = Set(bindings.compactMap(normalizedKeybinding(_:)))
+            guard !chords.isEmpty else {
+                return nil
+            }
+            return AppKeybindingExclusion(bundleID: rule.bundleID, appName: rule.appName, chords: chords)
+        }
+    }
+
+    func refreshFrontmostApplication() {
+        let app = NSWorkspace.shared.frontmostApplication
+        frontmostAppBundleID = app?.bundleIdentifier
+        frontmostAppName = app?.localizedName
     }
 
     func handleKeyEvent(_ event: CGEvent, type: CGEventType) -> Bool {

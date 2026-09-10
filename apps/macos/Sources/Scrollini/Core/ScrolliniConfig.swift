@@ -399,6 +399,9 @@ struct WindowRule: Codable {
     var openPosition: NewWindowPosition?
     var trackpadNavigation: Bool?
     var hoverToFocus: Bool?
+    /// Chords this app should keep for itself. Matched against the frontmost application rather
+    /// than a tiled window, so a rule needs `bundle_id` or `app_name` for these to apply.
+    var excludedKeybindings: [String]?
 
     init(
         bundleID: String? = nil,
@@ -409,7 +412,8 @@ struct WindowRule: Codable {
         workspace: Int? = nil,
         openPosition: NewWindowPosition? = nil,
         trackpadNavigation: Bool? = nil,
-        hoverToFocus: Bool? = nil
+        hoverToFocus: Bool? = nil,
+        excludedKeybindings: [String]? = nil
     ) {
         self.bundleID = bundleID
         self.appName = appName
@@ -420,6 +424,19 @@ struct WindowRule: Codable {
         self.openPosition = openPosition
         self.trackpadNavigation = trackpadNavigation
         self.hoverToFocus = hoverToFocus
+        self.excludedKeybindings = excludedKeybindings
+    }
+
+    /// `matches(_:)` needs a tiled window. Key exclusions run on every keystroke against whatever
+    /// app is frontmost, which may own no managed window at all, so they match on app identity only.
+    func matchesApplication(bundleID candidateBundleID: String?, appName candidateAppName: String?) -> Bool {
+        if let bundleID, bundleID != candidateBundleID {
+            return false
+        }
+        if let appName, appName != candidateAppName {
+            return false
+        }
+        return bundleID != nil || appName != nil
     }
 
     func matches(_ window: ManagedWindow) -> Bool {
@@ -447,6 +464,7 @@ struct WindowRule: Codable {
         case openPosition = "open_position"
         case trackpadNavigation = "trackpad_navigation"
         case hoverToFocus = "hover_to_focus"
+        case excludedKeybindings = "excluded_keybindings"
     }
 }
 

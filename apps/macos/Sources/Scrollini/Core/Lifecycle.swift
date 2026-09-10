@@ -65,6 +65,15 @@ extension Scrollini {
 
     func observeWorkspace() {
         let center = NSWorkspace.shared.notificationCenter
+        // Registered ahead of applicationActivated(_:) and kept separate from it: that handler
+        // returns early in several cases, and the cache has to track every activation so per-app
+        // keybinding exclusions never consult a stale frontmost app.
+        center.addObserver(
+            self,
+            selector: #selector(frontmostApplicationChanged(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
         center.addObserver(
             self,
             selector: #selector(applicationActivated(_:)),
@@ -83,6 +92,15 @@ extension Scrollini {
             name: NSWorkspace.didTerminateApplicationNotification,
             object: nil
         )
+    }
+
+    @objc func frontmostApplicationChanged(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+            refreshFrontmostApplication()
+            return
+        }
+        frontmostAppBundleID = app.bundleIdentifier
+        frontmostAppName = app.localizedName
     }
 
     func installTerminationHandlers() {
