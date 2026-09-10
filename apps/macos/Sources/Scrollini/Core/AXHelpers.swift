@@ -28,11 +28,9 @@ extension Scrollini {
 
     func axElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
-              let value
-        else {
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
             return nil
         }
-        return (value as! AXUIElement)
+        return asAXUIElement(value)
     }
 }

@@ -364,7 +364,9 @@ extension Scrollini {
         }
 
         let current = widthRatio(for: window)
-        guard current < 1.0 - 0.005 else {
+        // A column dragged or preset past 1.0 is not maximized, it is overflowing. Only a column
+        // already sitting at exactly the working area has nothing to do here.
+        guard abs(current - 1.0) >= 0.005 else {
             return false
         }
 

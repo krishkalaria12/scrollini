@@ -26,11 +26,19 @@ extension Scrollini {
     @discardableResult
     func reloadConfigFromDisk(previousSourceURL: URL?) -> Bool {
         guard let previousSourceURL else {
-            let reloaded = ScrolliniConfig.loadWithMetadata(logLoaded: false)
+            let reloaded = ScrolliniConfig.loadWithMetadata(
+                logLoaded: false,
+                logErrors: !configLoadErrorsSuppressed
+            )
             guard reloaded.sourceURL != nil else {
+                // This path is polled once per rescan with no modification-date guard to gate it,
+                // so a config that never parses would otherwise write its error to stderr at 1 Hz
+                // for the life of the process. Say it once, then wait for something to change.
+                configLoadErrorsSuppressed = true
                 return false
             }
 
+            configLoadErrorsSuppressed = false
             applyLoadedConfig(reloaded)
             let sourcePath = loadedConfig.sourceURL?.path ?? "fallback"
             print("scrollini: reloaded config \(sourcePath), \(commandByKeybinding.count) keybindings")

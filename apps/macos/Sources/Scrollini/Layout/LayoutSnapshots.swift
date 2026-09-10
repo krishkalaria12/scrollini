@@ -107,9 +107,27 @@ extension Scrollini {
         }
     }
 
+    /// Whether the saved layout is still eligible to be restored, dropping it once the grace
+    /// period is over. Restoration is a startup step: past that point a window whose app and
+    /// title happen to match the snapshot is a coincidence, and rearranging the session around
+    /// it is worse than leaving it where the user put it.
+    func persistentRestorationIsLive() -> Bool {
+        guard needsPersistentLayoutRestore || needsPersistentFocusRestore else {
+            return false
+        }
+        guard CFAbsoluteTimeGetCurrent() > persistentLayoutRestoreDeadline else {
+            return true
+        }
+
+        needsPersistentLayoutRestore = false
+        needsPersistentFocusRestore = false
+        persistentLayoutSnapshot = nil
+        return false
+    }
+
     @discardableResult
     func applyPersistentLayoutSnapshotIfNeeded() -> Bool {
-        guard needsPersistentLayoutRestore else {
+        guard persistentRestorationIsLive(), needsPersistentLayoutRestore else {
             return false
         }
 
@@ -178,12 +196,19 @@ extension Scrollini {
     }
 
     func restorePersistentFocusedWindow() -> Bool {
+        guard persistentRestorationIsLive(), needsPersistentFocusRestore else {
+            return false
+        }
+
         guard let focusedWindow = persistentLayoutSnapshot?.focusedWindow,
               let location = tiledWindowLocation(matching: focusedWindow)
         else {
             return false
         }
 
+        // Restoring focus is a one-shot. Left standing, every later rescan that found no
+        // frontmost tiled window would yank focus back to whatever was focused last session.
+        needsPersistentFocusRestore = false
         setActiveWorkspace(location.workspaceIndex)
         location.workspace.activeColumn = location.columnIndex
         return true

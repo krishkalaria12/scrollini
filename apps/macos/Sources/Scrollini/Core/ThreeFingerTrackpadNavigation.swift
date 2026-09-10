@@ -49,12 +49,18 @@ private let scrolliniTrackpadContactCallback: MTContactCallbackFunction = { _, t
 private final class MultitouchSupport {
     typealias CreateList = @convention(c) () -> Unmanaged<CFArray>?
     typealias RegisterContactFrameCallback = @convention(c) (MTDeviceRef?, MTContactCallbackFunction) -> Void
+    typealias UnregisterContactFrameCallback = @convention(c) (MTDeviceRef?, MTContactCallbackFunction) -> Void
     typealias DeviceStart = @convention(c) (MTDeviceRef?, Int32) -> Void
+    typealias DeviceStop = @convention(c) (MTDeviceRef?) -> Void
 
     let handle: UnsafeMutableRawPointer
     let createList: CreateList
     let registerContactFrameCallback: RegisterContactFrameCallback
     let deviceStart: DeviceStart
+    /// Optional: present on every macOS this runs on, but teardown degrades to leaving the device
+    /// running rather than failing to start if a future release drops them.
+    let unregisterContactFrameCallback: UnregisterContactFrameCallback?
+    let deviceStop: DeviceStop?
 
     init?() {
         guard let handle = dlopen(
@@ -72,14 +78,16 @@ private final class MultitouchSupport {
             return nil
         }
 
+        // The handle is deliberately never closed. MultitouchSupport runs its own contact thread,
+        // and unloading the framework out from under it while a device is still live is a crash
+        // waiting for the next swipe.
         self.handle = handle
         createList = unsafeBitCast(createListSymbol, to: CreateList.self)
         registerContactFrameCallback = unsafeBitCast(registerSymbol, to: RegisterContactFrameCallback.self)
         deviceStart = unsafeBitCast(startSymbol, to: DeviceStart.self)
-    }
-
-    deinit {
-        dlclose(handle)
+        unregisterContactFrameCallback = dlsym(handle, "MTUnregisterContactFrameCallback")
+            .map { unsafeBitCast($0, to: UnregisterContactFrameCallback.self) }
+        deviceStop = dlsym(handle, "MTDeviceStop").map { unsafeBitCast($0, to: DeviceStop.self) }
     }
 }
 
@@ -166,6 +174,17 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         if Self.active === self {
             Self.active = nil
         }
+
+        // Every device has to be unregistered and stopped before the references go. Without this
+        // a restart registered the same callback on the same device a second time, so each
+        // reload of trackpad settings doubled the deltas every swipe reported.
+        if let framework {
+            for device in devices {
+                framework.unregisterContactFrameCallback?(device, scrolliniTrackpadContactCallback)
+                framework.deviceStop?(device)
+            }
+        }
+
         devices.removeAll()
         deviceList = nil
         framework = nil

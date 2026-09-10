@@ -6,40 +6,47 @@ import Foundation
 import SwiftUI
 
 extension Scrollini {
+    /// First value any matching rule sets for one setting. Rules resolve per setting rather than
+    /// as a whole: a narrow rule that only pins `behavior` must not swallow the `workspace` a
+    /// broader rule declares for the same window, which is what reading every field off
+    /// `windowRules.first(where:)` used to do.
+    func ruleValue<Value>(for window: ManagedWindow, _ field: (WindowRule) -> Value?) -> Value? {
+        for rule in windowRules where rule.matches(window) {
+            if let value = field(rule) {
+                return value
+            }
+        }
+        return nil
+    }
+
     func widthRatio(for window: ManagedWindow) -> CGFloat {
         if let manualWidthRatio = window.manualWidthRatio {
             return manualWidthRatio.clampedManualWidthRatio
         }
 
-        for rule in windowRules where rule.matches(window) {
-            if let widthRatio = rule.widthRatio {
-                return widthRatio.clampedWidthRatio
-            }
-        }
-        return defaultWidthRatio
+        return ruleValue(for: window, \.widthRatio)?.clampedWidthRatio ?? defaultWidthRatio
     }
 
     func behavior(for window: ManagedWindow) -> WindowBehavior {
-        for rule in windowRules where rule.matches(window) {
-            if let behavior = rule.behavior {
-                return behavior
-            }
-        }
-        return .tile
+        ruleValue(for: window, \.behavior) ?? .tile
     }
 
-    func rule(for window: ManagedWindow) -> WindowRule? {
-        windowRules.first { $0.matches(window) }
+    func workspace(for window: ManagedWindow) -> Int? {
+        ruleValue(for: window, \.workspace)
+    }
+
+    func openPosition(for window: ManagedWindow) -> NewWindowPosition {
+        ruleValue(for: window, \.openPosition) ?? newWindowPosition
     }
 
     func hoverToFocusAllowed(for window: ManagedWindow) -> Bool {
-        rule(for: window)?.hoverToFocus ?? true
+        ruleValue(for: window, \.hoverToFocus) ?? true
     }
 
     var trackpadNavigationAllowedForActiveWindow: Bool {
         guard let window = activeWindow() else {
             return true
         }
-        return rule(for: window)?.trackpadNavigation ?? true
+        return ruleValue(for: window, \.trackpadNavigation) ?? true
     }
 }

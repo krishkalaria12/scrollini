@@ -256,7 +256,7 @@ extension Scrollini {
     }
 
     func targetWorkspace(for window: ManagedWindow) -> Workspace {
-        if let oneBased = rule(for: window)?.workspace {
+        if let oneBased = workspace(for: window) {
             let index = max(0, oneBased - 1)
             ensureWorkspaceExists(index)
             return workspaces[index]
@@ -276,7 +276,7 @@ extension Scrollini {
             return 0
         }
 
-        switch rule(for: window)?.openPosition ?? newWindowPosition {
+        switch openPosition(for: window) {
         case .beforeActive:
             return min(max(workspace.activeColumn, 0), workspace.columns.count)
         case .afterActive:
@@ -365,11 +365,10 @@ extension Scrollini {
         let appElement = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &value)
-        guard error == .success, let focused = value else {
+        guard error == .success, let focusedElement = asAXUIElement(value) else {
             return false
         }
 
-        let focusedElement = focused as! AXUIElement
         if floatingWindows.contains(where: { sameWindow($0.element, focusedElement) }) {
             if applyLayout {
                 projectLayout(focusActiveWindow: false)

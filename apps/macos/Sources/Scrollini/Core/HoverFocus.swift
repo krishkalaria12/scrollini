@@ -22,13 +22,18 @@ extension Scrollini {
             return
         }
 
-        let point = event.location
-        if shouldSuppressHoverFocusUntilRearmed(at: point) {
+        // Resolved once. This runs inside the event tap callback on every pointer move, and
+        // `hoverFocusTarget(at:)` projects the whole layout to answer, so asking it twice was
+        // doubling the cost of the hottest path in the program.
+        guard let target = hoverFocusTarget(at: event.location) else {
+            hoverFocusRequiresRearm = false
             cancelHoverFocus()
             return
         }
 
-        guard let target = hoverFocusTarget(at: point) else {
+        // Focus already moved to whatever is under the pointer. Until the pointer leaves every
+        // hover target, further moves must not keep re-triggering it.
+        guard !hoverFocusRequiresRearm else {
             cancelHoverFocus()
             return
         }
@@ -246,18 +251,5 @@ extension Scrollini {
     func cancelHoverFocus() {
         cancelTimer(&hoverFocusTimer)
         hoverFocusTarget = nil
-    }
-
-    func shouldSuppressHoverFocusUntilRearmed(at point: CGPoint) -> Bool {
-        guard hoverFocusRequiresRearm else {
-            return false
-        }
-
-        if hoverFocusTarget(at: point) == nil {
-            hoverFocusRequiresRearm = false
-            return false
-        }
-
-        return true
     }
 }

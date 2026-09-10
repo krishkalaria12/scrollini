@@ -113,23 +113,19 @@ extension Scrollini {
     func focusedWindow(for app: NSRunningApplication) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &value) == .success,
-              let value
-        else {
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &value) == .success else {
             return nil
         }
-        return (value as! AXUIElement)
+        return asAXUIElement(value)
     }
 
     func focusedUIElement(for app: NSRunningApplication) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &value) == .success,
-              let value
-        else {
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &value) == .success else {
             return nil
         }
-        return (value as! AXUIElement)
+        return asAXUIElement(value)
     }
 
     func isTransientSystemWindow(_ element: AXUIElement, app: NSRunningApplication) -> Bool {

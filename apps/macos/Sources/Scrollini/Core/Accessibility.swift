@@ -73,3 +73,15 @@ func currentExecutableURL() -> URL? {
 
     return URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath()
 }
+
+/// Bridges a value read off an AX attribute to an `AXUIElement`. Attributes are typed by
+/// convention, not by contract: an app is free to answer `kAXFocusedWindow` with a string, a
+/// number, or nothing useful at all, and an unconditional cast turns that into a crash. Every
+/// element-valued read goes through here so a badly behaved app costs one skipped window instead
+/// of the whole session.
+func asAXUIElement(_ value: CFTypeRef?) -> AXUIElement? {
+    guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
+        return nil
+    }
+    return (value as! AXUIElement)
+}

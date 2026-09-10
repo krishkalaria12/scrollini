@@ -47,14 +47,15 @@ enum WindowRestoration {
 enum CleanupWatcher {
     static func run(parentPID: pid_t, snapshotPath: String) -> Never {
         while true {
-            if !FileManager.default.fileExists(atPath: snapshotPath) {
-                usleep(250_000)
-                continue
-            }
-
+            // Liveness is checked before the snapshot, not after it. scrollini deletes its
+            // snapshot on the way out of a clean quit, and it never writes one at all until it
+            // manages a window, so waiting for the file first left this process spinning against
+            // a dead parent forever.
             if kill(parentPID, 0) == -1 && errno == ESRCH {
-                restore(snapshotPath: snapshotPath)
-                try? FileManager.default.removeItem(atPath: snapshotPath)
+                if FileManager.default.fileExists(atPath: snapshotPath) {
+                    restore(snapshotPath: snapshotPath)
+                    try? FileManager.default.removeItem(atPath: snapshotPath)
+                }
                 exit(0)
             }
 

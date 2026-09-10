@@ -43,6 +43,10 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     }
 
     var loadedConfig = ScrolliniConfig.loadWithMetadata()
+    /// When no config file has ever loaded, every rescan tick retries the candidate paths. Parse
+    /// failures there must not be logged each time, so complaints are suppressed until a load
+    /// actually succeeds. Starts suppressed because the load above has already had its say.
+    var configLoadErrorsSuppressed = true
     var config: ScrolliniConfig {
         loadedConfig.config
     }
@@ -116,6 +120,12 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var floatingRaiseGeneration: UInt64 = 0
     lazy var persistentLayoutSnapshot = readPersistentLayoutSnapshot()
     var needsPersistentLayoutRestore = true
+    var needsPersistentFocusRestore = true
+    /// Restoring a saved layout is a startup step, not a standing rule. Apps that were open last
+    /// session take a few seconds to come back, so the snapshot stays live for a short grace
+    /// period and is then dropped: past that, a window whose app and title happen to match is a
+    /// coincidence, and rearranging every workspace around it is worse than leaving it alone.
+    let persistentLayoutRestoreDeadline = CFAbsoluteTimeGetCurrent() + 20
     var signalSources: [DispatchSourceSignal] = []
     let restoreStateURL = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("scrollini-\(ProcessInfo.processInfo.processIdentifier).restore.json")

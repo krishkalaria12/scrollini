@@ -29,8 +29,15 @@ extension Scrollini {
             return
         }
 
-        expectedFocusedWindow = ObjectIdentifier(window)
-        expectedFocusedWindowUntil = max(expectedFocusedWindowUntil, CFAbsoluteTimeGetCurrent() + max(duration, 0.25))
+        // Extending the deadline only makes sense while the target is unchanged. Carrying a long
+        // deadline over to a different window pinned focus to the new one for however long the
+        // previous request had left, which outlasted the layout change that asked for it.
+        let deadline = CFAbsoluteTimeGetCurrent() + max(duration, 0.25)
+        let id = ObjectIdentifier(window)
+        expectedFocusedWindowUntil = expectedFocusedWindow == id
+            ? max(expectedFocusedWindowUntil, deadline)
+            : deadline
+        expectedFocusedWindow = id
     }
 
     func expectedFocusedWindowID() -> ObjectIdentifier? {
