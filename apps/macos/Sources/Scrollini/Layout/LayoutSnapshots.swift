@@ -73,6 +73,15 @@ extension Scrollini {
             }
         }
         guard !states.isEmpty else {
+            // Nothing to save yet. Deleting the file here would throw away a layout that has not
+            // had its chance to come back, and "no tiled windows" is precisely the state
+            // scrollini is in for the first seconds after login while last session's apps are
+            // still launching. Any projection in that window, a config reload or a display
+            // change, used to be enough to lose the layout for good.
+            guard !persistentRestorationIsLive() else {
+                return
+            }
+
             try? FileManager.default.removeItem(at: persistentLayoutStateURL)
             lastPersistentLayoutSnapshotData = nil
             return
