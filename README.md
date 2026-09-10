@@ -74,27 +74,34 @@ terminal app itself to get those permissions.
 
 | Shortcut | Action |
 | :------- | :----- |
-| `Cmd+1`..`Cmd+9` | Focus workspace by dynamic index |
-| `Cmd+0` | Focus the previous workspace |
-| `Cmd+J` / `Cmd+K` | Focus workspace down / up |
-| `Cmd+H` / `Cmd+L` | Focus column left / right |
-| `Cmd+[` / `Cmd+]` | Focus first / last column |
-| `Cmd+Home` / `Cmd+End` | Focus first / last column |
-| `Cmd+Shift+1`..`Cmd+Shift+9` | Move column to workspace |
-| `Cmd+Shift+J` / `Cmd+Shift+K` | Move column workspace down / up |
-| `Cmd+Shift+H` / `Cmd+Shift+L` | Move column left / right |
-| `Cmd+Shift+[` / `Cmd+Shift+]` | Move column to first / last |
-| `Cmd+Ctrl+H` / `Cmd+Ctrl+L` | Cycle active column width preset |
-| `Cmd+Ctrl+-` / `Cmd+Ctrl+=` | Nudge active column width |
-| `Cmd+Ctrl+Shift+H` / `Cmd+Ctrl+Shift+L` | Cycle every tiled window width preset |
-| `Cmd+Ctrl+Shift+-` / `Cmd+Ctrl+Shift+=` | Nudge every tiled window width |
-| `Cmd+Ctrl+F` | Maximize the active column, or restore its previous width |
-| `Cmd+Ctrl+R` | Reset the active column to its configured width |
+| `Ctrl+Opt+Left` / `Ctrl+Opt+Right` | Focus column left / right |
+| `Ctrl+Opt+Up` / `Ctrl+Opt+Down` | Focus workspace up / down |
+| `Ctrl+Opt+[` / `Ctrl+Opt+]` | Focus first / last column |
+| `Ctrl+Opt+1`..`Ctrl+Opt+9` | Focus workspace by dynamic index |
+| `Ctrl+Opt+0` | Focus the previous workspace |
+| `Ctrl+Opt+Shift+Left` / `Ctrl+Opt+Shift+Right` | Move column left / right |
+| `Ctrl+Opt+Shift+Up` / `Ctrl+Opt+Shift+Down` | Move column to workspace up / down |
+| `Ctrl+Opt+Shift+[` / `Ctrl+Opt+Shift+]` | Move column to first / last |
+| `Ctrl+Opt+Shift+1`..`Ctrl+Opt+Shift+9` | Move column to workspace by index |
+| `Ctrl+Opt+R` | Cycle the active column through the width presets |
+| `Ctrl+Opt+-` / `Ctrl+Opt+=` | Nudge the active column narrower / wider |
+| `Ctrl+Opt+F` | Maximize the active column, or restore its previous width |
+| `Ctrl+Opt+Shift+R` | Reset the active column to its configured width |
 | three-finger swipe left / right | Scroll through columns |
 | three-finger swipe up / down | Switch workspace |
 
-Everything else passes through. The default config excludes `Cmd+Shift+5`, so
-macOS screen recording keeps working.
+`Ctrl+Opt` focuses. `Ctrl+Opt+Shift` moves whatever `Ctrl+Opt` focuses. One modifier
+pair covers everything because `Ctrl+Opt` is the only two-modifier combination macOS
+leaves unclaimed, so no default here fights Hide Application, Enter Full Screen,
+browser tab switching, the screenshot shortcuts, or the Option character layer.
+`excluded_keybindings` ships empty for that reason. Everything else passes through.
+
+Opt is the key labelled `option` and `alt`, marked ⌥, between Control and Command.
+
+Five commands ship unbound and are yours to assign: `cycle_width_preset_backward`,
+`cycle_all_width_presets_forward`, `cycle_all_width_presets_backward`,
+`nudge_all_widths_narrower`, and `nudge_all_widths_wider`. Cycling forward wraps at
+both ends, so the backward binding is a convenience rather than a necessity.
 
 Trackpad navigation uses Apple's private MultitouchSupport framework so Scrollini can
 see raw three-finger movement without stealing normal two-finger scrolling. It
@@ -155,13 +162,13 @@ The repo includes a full default config. A compact version looks like this:
   "inner_gap": 12,
   "outer_gap": 12,
   "parked_sliver_width": 1,
-  "excluded_keybindings": ["cmd+shift+5"],
+  "excluded_keybindings": [],
   "keybindings": {
-    "column_left": ["cmd+h"],
-    "column_right": ["cmd+l"],
-    "workspace_down": ["cmd+j"],
-    "workspace_up": ["cmd+k"],
-    "move_column_to_workspace_5": ["cmd+ctrl+shift+5"]
+    "column_left": ["ctrl+alt+left", "ctrl+alt+h"],
+    "column_right": ["ctrl+alt+right", "ctrl+alt+l"],
+    "workspace_down": ["ctrl+alt+down", "ctrl+alt+j"],
+    "workspace_up": ["ctrl+alt+up", "ctrl+alt+k"],
+    "cycle_width_preset_backward": ["ctrl+alt+shift+f"]
   },
   "trackpad_navigation": true,
   "trackpad_navigation_fingers": 3,
@@ -192,14 +199,25 @@ The repo includes a full default config. A compact version looks like this:
 ```
 
 `keybindings` is merged with the built-in defaults by action name, so a config
-can override only the actions it cares about. Set an action to `[]` to disable
-it. `excluded_keybindings` always wins, so the default `Cmd+Shift+5`
-screen-recording shortcut passes through; moving a column to workspace 5 uses
-`Cmd+Ctrl+Shift+5`. See `scrollini.config.json` for the full command-name list.
+can override only the actions it cares about. Each action takes a list, so the
+sample above puts column navigation on the arrow keys and on `hjkl` at the same
+time. Set an action to `[]` to disable it.
+
+`excluded_keybindings` always wins over `keybindings` and is the escape hatch for
+rebinding into territory macOS or an app already owns. Nothing in the defaults needs
+it, but if you move a binding onto, say, `cmd+shift+4`, add the chord there to hand
+it back to the system. Note that the exclusion is global rather than per-app.
+
+See `scrollini.config.json` for the full command-name list.
 
 Keybinding strings support the standard modifiers `cmd`/`win`/`windows`/`super`/`meta`,
-`ctrl`, `shift`, `alt`/`option`, and `fn`/`globe`. This makes MacBook keyboard
-shortcuts like `cmd+fn+left` configurable without requiring a separate Home/End key.
+`ctrl`, `shift`, `alt`/`option`, and `fn`/`globe`, so a chord like `ctrl+alt+fn+left`
+is expressible on a MacBook keyboard that has no Home or End key.
+
+Be careful binding `home`, `end`, `pageup`, or `pagedown` on a laptop. Because fn+Left
+is how a MacBook types Home, scrollini also matches those chords with the `fn` stripped,
+which means binding `cmd+home` would swallow Cmd+fn+Left and take jump-to-start-of-document
+away from every text field. The defaults use `[` and `]` instead.
 
 Useful string settings:
 

@@ -75,9 +75,12 @@ Niri commit inspected: `dd75865`
 
 ## MVP Mapping
 
-- `Cmd+1..9`: focus dynamic workspace index, clamped to the last empty row.
-- `Cmd+J/K`: focus workspace down/up.
-- `Cmd+H/L`: focus column left/right.
+- `Ctrl+Opt+1..9`: focus dynamic workspace index, clamped to the last empty row.
+- `Ctrl+Opt+Up/Down`: focus workspace up/down.
+- `Ctrl+Opt+Left/Right`: focus column left/right.
+- Niri owns the whole keyboard because it is the compositor. scrollini sits above the
+  WindowServer instead, so it takes `Ctrl+Opt` rather than Niri's bare `Mod`, which on
+  macOS would be Command and would collide with every app menu.
 - Every managed window is a single full-screen-sized column.
 - Column widths use Niri's proportional formula and gap packing directly.
 - macOS cannot force a window to a size its app refuses, so scrollini measures what
