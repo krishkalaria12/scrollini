@@ -109,6 +109,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var manualResizeEndTimer: DispatchSourceTimer?
     var manualResizeElement: AXUIElement?
     var manualResizeSuppressedUntil: CFAbsoluteTime = 0
+    var cachedViewport: CGRect?
+    var cachedViewportAt: CFAbsoluteTime = 0
+    /// Short enough that a menu bar or Dock change nobody told us about self-heals within a
+    /// frame or two, long enough that a single layout pass never reads two different viewports.
+    let viewportCacheDuration: CFAbsoluteTime = 0.2
     var presentationFrames: [ObjectIdentifier: CGRect] = [:]
     var appliedFrames: [ObjectIdentifier: CGRect] = [:]
     var appliedAlphas: [UInt32: Float] = [:]
@@ -143,6 +148,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
             exit(1)
         }
 
+        boundAccessibilityMessagingTimeout()
         observeWorkspace()
         installTerminationHandlers()
         if restoreOnExit {

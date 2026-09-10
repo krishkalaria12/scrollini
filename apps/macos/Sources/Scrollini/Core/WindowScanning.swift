@@ -158,7 +158,12 @@ extension Scrollini {
 
     func discoverWindows() -> [ManagedWindow] {
         let currentPID = ProcessInfo.processInfo.processIdentifier
-        let knownWindows = allWindows()
+        // Indexed once per scan. The old membership test walked every managed window for every
+        // candidate the system reported, which is quadratic in the window count on every tick.
+        var knownByElement: [AXElementKey: ManagedWindow] = [:]
+        for window in allWindows() {
+            knownByElement[AXElementKey(window.element)] = window
+        }
         var windows: [ManagedWindow] = []
 
         for app in NSWorkspace.shared.runningApplications {
@@ -179,10 +184,21 @@ extension Scrollini {
                 continue
             }
 
-            for element in axWindows where isManageableWindow(element) || isKnownWindow(element, in: knownWindows) {
+            for element in axWindows {
+                // Manageability costs seven accessibility round trips to establish. A window
+                // already in the model has passed that test once and is kept from here on
+                // regardless of the answer, so asking again every tick bought nothing and made
+                // the steady-state cost of running scrollini scale with how long it had been up.
+                let known = knownByElement[AXElementKey(element)]
+                guard known != nil || isManageableWindow(element) else {
+                    continue
+                }
+
                 let title = axString(element, kAXTitleAttribute) ?? ""
                 let appName = app.localizedName ?? "pid \(pid)"
-                let windowID = SkyLight.shared.windowID(for: element)
+                // Another round trip into the window server, and the answer never changes for
+                // the life of a window.
+                let windowID = known?.windowID ?? SkyLight.shared.windowID(for: element)
                 let window = ManagedWindow(
                     element: element,
                     pid: pid,
@@ -231,10 +247,6 @@ extension Scrollini {
         let positionError = AXUIElementIsAttributeSettable(element, kAXPositionAttribute as CFString, &positionSettable)
         let sizeError = AXUIElementIsAttributeSettable(element, kAXSizeAttribute as CFString, &sizeSettable)
         return positionError == .success && sizeError == .success && positionSettable.boolValue && sizeSettable.boolValue
-    }
-
-    func isKnownWindow(_ element: AXUIElement, in knownWindows: [ManagedWindow]) -> Bool {
-        knownWindows.contains { sameWindow($0.element, element) }
     }
 
     func insertNewWindow(_ window: ManagedWindow, applyLayout: Bool = true, focusNewWindow: Bool = true) {

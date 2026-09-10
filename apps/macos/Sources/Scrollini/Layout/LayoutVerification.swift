@@ -169,9 +169,12 @@ extension Scrollini {
     }
 
     func currentLayoutItem(for window: ManagedWindow) -> LayoutItem? {
-        let viewport = currentViewport()
-        let layout = layoutItems(viewport: viewport, state: captureLayoutState(), parkHidden: true)
-        return layout.first { $0.window === window }
+        layoutItem(
+            for: window,
+            viewport: currentViewport(),
+            state: captureLayoutState(),
+            parkHidden: true
+        )
     }
 
     func framesApproximatelyEqual(_ left: CGRect, _ right: CGRect, tolerance: CGFloat) -> Bool {

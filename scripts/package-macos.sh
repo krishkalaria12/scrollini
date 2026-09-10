@@ -2,6 +2,10 @@
 set -euo pipefail
 
 app_name="Scrollini"
+# The name SwiftPM gives the built binary, which is the target name. Distinct from the name it
+# gets inside the bundle: conflating the two only worked because the default macOS filesystem is
+# case-insensitive, and broke on a case-sensitive volume.
+product_name="Scrollini"
 executable_name="scrollini"
 bundle_id="io.github.krishkalaria12.scrollini"
 minimum_system_version="13.0"
@@ -78,14 +82,14 @@ stage_root="$output_dir/stage/arm64-darwin"
 volume_root="$stage_root/volume"
 app_dir="$volume_root/$app_name.app"
 dmg_path="$output_dir/$app_name-$version-arm64-darwin.dmg"
-binary_path="$package_root/.build/arm64-apple-macosx/release/$executable_name"
+binary_path="$package_root/.build/arm64-apple-macosx/release/$product_name"
 
 if [[ "$skip_build" != "1" ]]; then
   (cd "$package_root" && swift build -c release --arch arm64)
 fi
 
 if [[ ! -x "$binary_path" ]]; then
-  fallback_binary="$package_root/.build/release/$executable_name"
+  fallback_binary="$package_root/.build/release/$product_name"
   if [[ -x "$fallback_binary" ]]; then
     binary_path="$fallback_binary"
   else

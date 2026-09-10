@@ -68,47 +68,97 @@ extension Scrollini {
         scheduleColumnMeasurement(after: max(layoutLockDelay, 0.08) + 0.04)
     }
 
-    func layoutItems(viewport: CGRect, state: LayoutState, parkHidden: Bool) -> [LayoutItem] {
+    func cameraY(for state: LayoutState, viewport: CGRect) -> CGFloat {
         let stateActiveWorkspace = min(max(state.activeWorkspace, 0), max(workspaces.count - 1, 0))
-        let cameraY = state.cameraY ?? CGFloat(stateActiveWorkspace) * viewport.height
+        return state.cameraY ?? CGFloat(stateActiveWorkspace) * viewport.height
+    }
+
+    func layoutItems(viewport: CGRect, state: LayoutState, parkHidden: Bool) -> [LayoutItem] {
+        let cameraY = cameraY(for: state, viewport: viewport)
         let cameraWorkspace = trackpadCameraWorkspaceIndex(cameraY: cameraY, viewport: viewport)
         var layout: [LayoutItem] = []
+        layout.reserveCapacity(workspaces.reduce(0) { $0 + $1.columns.count })
 
         for (workspaceIndex, workspace) in workspaces.enumerated() {
-            let activeColumn = activeColumn(in: workspace, workspaceIndex: workspaceIndex, state: state)
-            let scrollOffset = scrollOffset(in: workspace, workspaceIndex: workspaceIndex, state: state)
-            let strip = stripFrames(
+            layout.append(contentsOf: layoutItems(
                 for: workspace,
+                workspaceIndex: workspaceIndex,
                 viewport: viewport,
-                activeColumn: activeColumn,
-                scrollOffset: scrollOffset
-            )
-            let rowOffset = CGFloat(workspaceIndex) * viewport.height - cameraY
-
-            for (columnIndex, window) in workspace.columns.enumerated() {
-                let frame: CGRect
-                var projected = strip[columnIndex]
-                projected.origin.y += rowOffset
-                projected = visualFrame(projected, viewport: viewport)
-
-                let visible = projected.intersects(viewport)
-                if visible || !parkHidden {
-                    frame = projected
-                } else if workspaceIndex == cameraWorkspace {
-                    frame = parkedFrame(for: window, viewport: viewport, beforeActive: columnIndex < activeColumn)
-                } else {
-                    frame = parkedFrame(
-                        for: window,
-                        viewport: viewport,
-                        beforeActive: CGFloat(workspaceIndex) * viewport.height < cameraY
-                    )
-                }
-
-                layout.append(LayoutItem(window: window, frame: frame, visible: visible))
-            }
+                state: state,
+                cameraY: cameraY,
+                cameraWorkspace: cameraWorkspace,
+                parkHidden: parkHidden
+            ))
         }
 
         return layout
+    }
+
+    /// One workspace's columns, projected. Split out so callers that care about a single window
+    /// do not have to lay out every workspace to find it.
+    func layoutItems(
+        for workspace: Workspace,
+        workspaceIndex: Int,
+        viewport: CGRect,
+        state: LayoutState,
+        cameraY: CGFloat,
+        cameraWorkspace: Int,
+        parkHidden: Bool
+    ) -> [LayoutItem] {
+        let activeColumn = activeColumn(in: workspace, workspaceIndex: workspaceIndex, state: state)
+        let scrollOffset = scrollOffset(in: workspace, workspaceIndex: workspaceIndex, state: state)
+        let strip = stripFrames(
+            for: workspace,
+            viewport: viewport,
+            activeColumn: activeColumn,
+            scrollOffset: scrollOffset
+        )
+        let rowOffset = CGFloat(workspaceIndex) * viewport.height - cameraY
+
+        return workspace.columns.enumerated().map { columnIndex, window in
+            var projected = strip[columnIndex]
+            projected.origin.y += rowOffset
+            projected = visualFrame(projected, viewport: viewport)
+
+            let visible = projected.intersects(viewport)
+            let frame: CGRect
+            if visible || !parkHidden {
+                frame = projected
+            } else if workspaceIndex == cameraWorkspace {
+                frame = parkedFrame(for: window, viewport: viewport, beforeActive: columnIndex < activeColumn)
+            } else {
+                frame = parkedFrame(
+                    for: window,
+                    viewport: viewport,
+                    beforeActive: CGFloat(workspaceIndex) * viewport.height < cameraY
+                )
+            }
+
+            return LayoutItem(window: window, frame: frame, visible: visible)
+        }
+    }
+
+    /// Where one window belongs right now. Reached from every window move and resize
+    /// notification, which arrive in bursts while an app settles, so it lays out only the
+    /// workspace that owns the window instead of the whole model.
+    func layoutItem(for window: ManagedWindow, viewport: CGRect, state: LayoutState, parkHidden: Bool) -> LayoutItem? {
+        guard let workspaceIndex = workspaces.firstIndex(where: { workspace in
+            workspace.columns.contains { $0 === window }
+        }) else {
+            return nil
+        }
+
+        let cameraY = cameraY(for: state, viewport: viewport)
+        let items = layoutItems(
+            for: workspaces[workspaceIndex],
+            workspaceIndex: workspaceIndex,
+            viewport: viewport,
+            state: state,
+            cameraY: cameraY,
+            cameraWorkspace: trackpadCameraWorkspaceIndex(cameraY: cameraY, viewport: viewport),
+            parkHidden: parkHidden
+        )
+        return items.first { $0.window === window }
     }
 
     func activeColumn(in workspace: Workspace, workspaceIndex: Int, state: LayoutState) -> Int {
@@ -282,8 +332,35 @@ extension Scrollini {
         let safeInset = min(inset, viewport.width / 3, viewport.height / 3)
         return viewport.insetBy(dx: safeInset, dy: safeInset)
     }
+    /// The working area scrollini lays out on, held briefly so one burst of work sees one
+    /// viewport. Roughly twenty call sites ask for this, several of them per animation frame and
+    /// per pointer move, and a layout pass that read two different answers halfway through would
+    /// place its columns against two different rectangles. The window keeps staleness far below
+    /// anything a person can see, and a display change clears it outright.
     func currentViewport() -> CGRect {
-        guard let screen = NSScreen.main else {
+        let now = CFAbsoluteTimeGetCurrent()
+        if let cachedViewport, now - cachedViewportAt < viewportCacheDuration {
+            return cachedViewport
+        }
+
+        let viewport = computeViewport()
+        cachedViewport = viewport
+        cachedViewportAt = now
+        return viewport
+    }
+
+    func invalidateViewportCache() {
+        cachedViewport = nil
+        cachedViewportAt = 0
+    }
+
+    /// Deliberately the primary screen rather than `NSScreen.main`. `main` is whichever screen
+    /// holds the key window, so opening the settings window on a second display used to drag the
+    /// whole tiled layout across with it, and closing it dragged everything back. scrollini is a
+    /// single-display manager by design, and which display it owns must not depend on where some
+    /// window happens to be sitting.
+    func computeViewport() -> CGRect {
+        guard let screen = NSScreen.screens.first ?? NSScreen.main else {
             return insetViewport(CGDisplayBounds(CGMainDisplayID()), by: outerGap)
         }
 

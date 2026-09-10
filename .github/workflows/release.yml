@@ -168,6 +168,12 @@ jobs:
           swift --version
           xcodebuild -version || true
 
+      - name: Self check
+        working-directory: apps/macos
+        run: |
+          swift build
+          "$(swift build --show-bin-path)/Scrollini" --self-check
+
       - name: Package DMG
         run: |
           scripts/package-macos.sh \

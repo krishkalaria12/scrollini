@@ -85,3 +85,36 @@ func asAXUIElement(_ value: CFTypeRef?) -> AXUIElement? {
     }
     return (value as! AXUIElement)
 }
+
+/// Caps how long any accessibility call may block this process.
+///
+/// Every AX read and write scrollini makes is a synchronous Mach round trip, issued from the main
+/// thread, and the main thread is also what services the CGEvent tap that carries every keystroke
+/// and pointer move. Left unbounded, one beachballing app stalls that thread for as long as it
+/// takes to recover, macOS disables the tap for exceeding its own deadline, and the user loses
+/// keyboard input to an app they were not even using. A quarter second is far longer than a
+/// healthy app needs to answer, and a window that misses it is simply skipped until the next
+/// rescan. Applied to the system-wide element, which per the AX headers sets the timeout for the
+/// whole process rather than for one element.
+func boundAccessibilityMessagingTimeout(_ seconds: Float = 0.25) {
+    AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), seconds)
+}
+
+/// Hashable wrapper so accessibility elements can key a dictionary. `AXUIElement` is a CoreFoundation
+/// type with equality and hashing supplied by HIServices, but Swift will not use them for a
+/// `Dictionary` key without being told.
+struct AXElementKey: Hashable {
+    let element: AXUIElement
+
+    init(_ element: AXUIElement) {
+        self.element = element
+    }
+
+    static func == (left: AXElementKey, right: AXElementKey) -> Bool {
+        CFEqual(left.element, right.element)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(CFHash(element))
+    }
+}

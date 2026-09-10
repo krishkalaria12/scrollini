@@ -9,4 +9,8 @@ if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--cleanup-watc
     CleanupWatcher.run(parentPID: parentPID, snapshotPath: CommandLine.arguments[3])
 }
 
+if CommandLine.arguments.contains("--self-check") {
+    SelfCheck.run()
+}
+
 Scrollini().start()

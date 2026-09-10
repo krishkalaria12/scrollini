@@ -286,6 +286,20 @@ swift build
 swift run Scrollini
 ```
 
+Run the invariant checks before sending a change:
+
+```bash
+swift build
+"$(swift build --show-bin-path)/Scrollini" --self-check
+```
+
+These cover the parts of scrollini that are pure computation: strip geometry,
+layout projection, rule resolution, keybinding parsing, config clamping, and
+workspace bookkeeping. They exit non-zero on failure and the release workflow
+gates on them. They run as a subcommand rather than under `swift test` because
+`swift test` needs XCTest or swift-testing, and neither ships with the Command
+Line Tools that build the rest of this project.
+
 ## Releases
 
 Release artifacts are built by `.github/workflows/release.yml`.
@@ -301,6 +315,13 @@ Release artifacts are built by `.github/workflows/release.yml`.
 
 - scrollini targets macOS 13+ and Swift 6.
 - It uses public Accessibility APIs for the core window control path.
+- It manages one display: the primary screen, the one your menu bar is on.
+  Windows on other displays are left alone. The choice is deliberate rather than
+  ambient, so moving a window or opening the settings panel on a second display
+  does not drag the layout across with it.
+- Every accessibility call is capped at 250 ms. Those calls are synchronous and
+  share a thread with the event tap that carries your keystrokes, so an
+  unbounded one would let a beachballing app take your keyboard with it.
 - The SkyLight path is private and optional; if it is unavailable, hidden
   windows stay parked as side-edge slivers.
 - This does not use native macOS Spaces.

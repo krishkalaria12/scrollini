@@ -47,6 +47,7 @@ extension Scrollini {
     }
 
     func handlePeriodicTick() {
+        ensureEventTapEnabled()
         guard !reloadConfigIfNeeded() else {
             return
         }
@@ -92,6 +93,23 @@ extension Scrollini {
             name: NSWorkspace.didTerminateApplicationNotification,
             object: nil
         )
+
+        // Resolution changes, display arrangement, Dock resizing, and menu bar auto-hide all
+        // change the working area, and all of them post this. Anything the notification misses
+        // is caught by the cache expiring on its own.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screenParametersChanged(_:)),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
+    }
+
+    @objc func screenParametersChanged(_ notification: Notification) {
+        invalidateViewportCache()
+        clearAppliedLayoutCache()
+        rescanWindows(adoptFocused: false)
+        projectLayout(focusActiveWindow: false)
     }
 
     @objc func frontmostApplicationChanged(_ notification: Notification) {

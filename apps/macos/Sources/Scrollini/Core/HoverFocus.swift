@@ -59,7 +59,6 @@ extension Scrollini {
         }
 
         let state = captureLayoutState()
-        let layout = layoutItems(viewport: viewport, state: state, parkHidden: false)
         if hoverFocusMode == .edgeOrVisible,
            let edgeTarget = hoverFocusEdgeTarget(
                 point: point,
@@ -72,27 +71,39 @@ extension Scrollini {
             return edgeTarget
         }
 
-        for item in layout where item.visible && item.frame.contains(point) {
+        // Hover only ever retargets inside the active workspace, so this walks that one strip.
+        // Projecting every workspace and then searching the result for the window under the
+        // pointer cost a pass over every managed window plus a linear identity scan per
+        // candidate, on every pointer move, inside the event tap callback.
+        let cameraY = cameraY(for: state, viewport: viewport)
+        let items = layoutItems(
+            for: workspace,
+            workspaceIndex: activeWorkspace,
+            viewport: viewport,
+            state: state,
+            cameraY: cameraY,
+            cameraWorkspace: trackpadCameraWorkspaceIndex(cameraY: cameraY, viewport: viewport),
+            parkHidden: false
+        )
+
+        for (columnIndex, item) in items.enumerated() where item.visible && item.frame.contains(point) {
             guard hoverToFocusAllowed(for: item.window) else {
                 continue
             }
-            guard let loc = location(of: item.window.element), loc.workspace == activeWorkspace else {
-                continue
-            }
-            if loc.column == workspace.activeColumn {
+            if columnIndex == workspace.activeColumn {
                 return nil
             }
             let immediate = hoverFocusMode == .edgeOrVisible
                 && hoverFocusEdgeTrigger(
-                    targetColumn: loc.column,
+                    targetColumn: columnIndex,
                     activeColumn: workspace.activeColumn,
                     point: point,
                     viewport: viewport
                 )
             guard immediate || hoverFocusCanScroll(
-                toColumn: loc.column,
+                toColumn: columnIndex,
                 in: workspace,
-                workspaceIndex: loc.workspace,
+                workspaceIndex: activeWorkspace,
                 state: state,
                 viewport: viewport,
                 targetFrame: item.frame,
@@ -100,7 +111,7 @@ extension Scrollini {
             ) else {
                 continue
             }
-            return (item.window, loc.workspace, loc.column, immediate)
+            return (item.window, activeWorkspace, columnIndex, immediate)
         }
 
         return nil

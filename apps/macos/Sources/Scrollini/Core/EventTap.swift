@@ -50,6 +50,19 @@ extension Scrollini {
             CGEvent.tapEnable(tap: eventTap, enable: true)
         }
     }
+
+    /// macOS disables an event tap whose callback overran its deadline, and it delivers
+    /// `tapDisabledByTimeout` to say so. That notice is the only thing standing between a slow
+    /// moment and losing every keybinding for the rest of the session, so it is worth not being
+    /// the only thing. Polled from the rescan tick, which costs one boolean read per second.
+    func ensureEventTapEnabled() {
+        guard let eventTap, !CGEvent.tapIsEnabled(tap: eventTap) else {
+            return
+        }
+
+        debugLog("event tap was disabled; re-enabling")
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+    }
     func configureInput() {
         commandByKeybinding = makeCommandByKeybinding()
         excludedKeybindingSet = Set((config.excludedKeybindings ?? ScrolliniConfig.fallback.excludedKeybindings ?? [])
