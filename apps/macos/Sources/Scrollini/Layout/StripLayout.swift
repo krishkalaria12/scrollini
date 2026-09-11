@@ -205,9 +205,15 @@ extension Scrollini {
         let width = layoutWidth(for: window, viewport: viewport)
         let height = max(1, viewport.height)
         var frame = CGRect(x: viewport.minX, y: viewport.minY, width: width, height: height)
+
+        // The viewport already excludes the outer gap. Parking against that inset edge exposes
+        // the outer gap plus the requested sliver, so hidden columns remain visibly stacked over
+        // the nearest column. Recover the real display edge before placing the sliver.
+        let displayMinX = viewport.minX - outerGap
+        let displayMaxX = viewport.maxX + outerGap
         frame.origin.x = beforeActive
-            ? viewport.minX - width + parkedSliverWidth
-            : viewport.maxX - parkedSliverWidth
+            ? displayMinX - width + parkedSliverWidth
+            : displayMaxX - parkedSliverWidth
         return frame
     }
 }

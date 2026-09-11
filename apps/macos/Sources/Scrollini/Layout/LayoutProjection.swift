@@ -214,6 +214,20 @@ extension Scrollini {
             setWindowAlpha(0, for: item.window.windowID)
         }
 
+        // macOS can refuse a far-offscreen AX position and leave more of a parked window visible
+        // than requested. Put the real strip windows back above those parked fallbacks so an older
+        // column cannot draw over the visible neighbour at either edge. Raise the active column
+        // last without changing focus; requestFocus below still owns activation when requested.
+        if layout.contains(where: { !$0.visible }) {
+            let active = activeWindow()
+            for item in layout where item.visible && item.window !== active {
+                AXUIElementPerformAction(item.window.element, kAXRaiseAction as CFString)
+            }
+            if let activeItem = layout.first(where: { $0.visible && $0.window === active }) {
+                AXUIElementPerformAction(activeItem.window.element, kAXRaiseAction as CFString)
+            }
+        }
+
         if let focusedWindow {
             requestFocus(focusedWindow, verify: verifyFocus, delay: focusDelay)
         }

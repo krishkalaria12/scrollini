@@ -118,12 +118,57 @@ final class StripLayoutTests: XCTestCase {
 
     func testParkedFrames() {
         let s = Scrollini()
+        s.loadedConfig = LoadedScrolliniConfig(
+            config: ScrolliniConfig(outerGap: 12, parkedSliverWidth: 1),
+            sourceURL: nil,
+            sourceModificationDate: nil
+        )
         let w = makeWindow(400); w.manualWidthRatio = 0.8
         let before = s.parkedFrame(for: w, viewport: testViewport, beforeActive: true)
         let after = s.parkedFrame(for: w, viewport: testViewport, beforeActive: false)
-        XCTAssertEqual(before.minX, testViewport.minX - before.width + s.parkedSliverWidth, accuracy: 0.001)
-        XCTAssertEqual(after.minX, testViewport.maxX - s.parkedSliverWidth, accuracy: 0.001)
+        XCTAssertEqual(
+            before.maxX,
+            testViewport.minX - s.outerGap + s.parkedSliverWidth,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            after.minX,
+            testViewport.maxX + s.outerGap - s.parkedSliverWidth,
+            accuracy: 0.001
+        )
         XCTAssertEqual(before.height, testViewport.height, accuracy: 0.001)
+    }
+
+    func testRightSideFocusKeepsOneNeighborPackedWithoutExposingOlderColumns() {
+        let s = Scrollini()
+        s.loadedConfig = LoadedScrolliniConfig(
+            config: ScrolliniConfig(
+                defaultWidthRatio: 0.8,
+                focusAlignment: .smart,
+                innerGap: 12,
+                outerGap: 12,
+                parkedSliverWidth: 1
+            ),
+            sourceURL: nil,
+            sourceModificationDate: nil
+        )
+
+        let viewport = CGRect(x: 12, y: 25, width: 1576, height: 1000)
+        let workspace = Workspace()
+        workspace.columns = (0..<5).map(makeWindow)
+        workspace.activeColumn = 3
+        s.workspaces = [workspace]
+
+        let state = s.captureLayoutState()
+        let items = s.layoutItems(viewport: viewport, state: state, parkHidden: true)
+
+        XCTAssertFalse(items[0].visible)
+        XCTAssertFalse(items[1].visible)
+        XCTAssertTrue(items[2].visible)
+        XCTAssertTrue(items[3].visible)
+        XCTAssertEqual(items[0].frame.maxX, 1, accuracy: 0.001)
+        XCTAssertEqual(items[1].frame.maxX, 1, accuracy: 0.001)
+        XCTAssertEqual(items[3].frame.minX - items[2].frame.maxX, s.innerGap, accuracy: 0.001)
     }
 
     func testEmptyWorkspaceMetrics() {
