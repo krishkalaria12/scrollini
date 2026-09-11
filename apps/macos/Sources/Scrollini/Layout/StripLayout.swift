@@ -30,11 +30,13 @@ extension Scrollini {
         )
         // Column origins live in a gap-free virtual strip, so the leading outer gap is added here
         // once rather than being baked into every origin.
-        let columnHeight = max(1, viewport.height - innerGap * 2)
+        // Horizontal gaps keep adjacent columns distinct. Vertical gaps waste working area and
+        // make tiled apps stop short of the menu bar and Dock, so columns fill the viewport.
+        let columnHeight = max(1, viewport.height)
         return workspace.columns.indices.map { index in
             CGRect(
                 x: viewport.minX + innerGap + metrics.origins[index] - scrollOffset,
-                y: viewport.minY + innerGap,
+                y: viewport.minY,
                 width: metrics.widths[index],
                 height: columnHeight
             )
@@ -201,8 +203,8 @@ extension Scrollini {
 
     func parkedFrame(for window: ManagedWindow, viewport: CGRect, beforeActive: Bool) -> CGRect {
         let width = layoutWidth(for: window, viewport: viewport)
-        let height = max(1, viewport.height - innerGap * 2)
-        var frame = CGRect(x: viewport.minX, y: viewport.minY + innerGap, width: width, height: height)
+        let height = max(1, viewport.height)
+        var frame = CGRect(x: viewport.minX, y: viewport.minY, width: width, height: height)
         frame.origin.x = beforeActive
             ? viewport.minX - width + parkedSliverWidth
             : viewport.maxX - parkedSliverWidth

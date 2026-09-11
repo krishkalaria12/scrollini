@@ -116,8 +116,8 @@ enum Command {
     case resetColumnWidth
 }
 
-/// Which way a three-finger swipe committed. niri decides this once per gesture and then drives a
-/// single axis, so a swipe up changes workspace without also dragging the column strip sideways.
+/// Which axis a trackpad gesture drives. The contact count picks it before motion begins, so a
+/// column swipe cannot also drag the workspace camera.
 enum TrackpadNavigationAxis {
     case horizontal
     case vertical

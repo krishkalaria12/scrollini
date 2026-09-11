@@ -448,6 +448,8 @@ enum SelfCheck {
         wild.outerGap = -20
         wild.rescanIntervalMS = 5
         wild.trackpadNavigationFingers = 99
+        wild.trackpadNavigationColumnFingers = 99
+        wild.trackpadNavigationWorkspaceFingers = 1
         wild.presetWidthRatios = [3.0, 0.5, 0.5, -1.0]
 
         let normalized = ScrolliniConfig.normalize(wild)
@@ -455,6 +457,8 @@ enum SelfCheck {
         check("outer gap clamps to zero", normalized.outerGap == 0)
         check("rescan interval clamps to its floor", normalized.rescanIntervalMS == 100)
         check("finger count clamps to five", normalized.trackpadNavigationFingers == 5)
+        check("column finger count clamps to five", normalized.trackpadNavigationColumnFingers == 5)
+        check("workspace finger count clamps to two", normalized.trackpadNavigationWorkspaceFingers == 2)
         check("presets come back sorted, clamped and deduplicated", normalized.presetWidthRatios == [0.05, 0.5, 2.0])
     }
 
@@ -745,7 +749,7 @@ enum SelfCheck {
         let sliver = s.parkedSliverWidth
         check("parked before sits left of viewport", approx(before.minX, viewport.minX - before.width + sliver))
         check("parked after sits right of viewport", approx(after.minX, viewport.maxX - sliver))
-        check("parked height respects innerGap", approx(before.height, viewport.height - s.innerGap * 2))
+        check("parked height fills viewport", approx(before.height, viewport.height))
         check("parked width matches layoutWidth", approx(before.width, s.layoutWidth(for: w, viewport: viewport)))
     }
 

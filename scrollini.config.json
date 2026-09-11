@@ -67,6 +67,8 @@
     "nudge_all_widths_wider": []
   },
   "trackpad_navigation": true,
+  "trackpad_navigation_column_fingers": 3,
+  "trackpad_navigation_workspace_fingers": 4,
   "trackpad_navigation_fingers": 3,
   "trackpad_navigation_sensitivity": 1.6,
   "trackpad_navigation_workspace_sensitivity": 6.4,

@@ -119,6 +119,7 @@ extension Scrollini {
         }
         frontmostAppBundleID = app.bundleIdentifier
         frontmostAppName = app.localizedName
+        refreshGlobalHotkeysForFrontmostApp()
     }
 
     func installTerminationHandlers() {

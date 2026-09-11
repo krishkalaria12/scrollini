@@ -12,7 +12,8 @@ extension Scrollini {
         }
 
         let navigation = ThreeFingerTrackpadNavigation(
-            fingers: trackpadNavigationFingers,
+            columnFingers: trackpadNavigationColumnFingers,
+            workspaceFingers: trackpadNavigationWorkspaceFingers,
             invertX: trackpadNavigationInvertX,
             invertY: trackpadNavigationInvertY,
             directionLockThreshold: trackpadNavigationDirectionLockThreshold

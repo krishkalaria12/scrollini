@@ -221,13 +221,23 @@ struct ScrolliniSettingsView: View {
 
     private var trackpadSection: some View {
         Section("Trackpad") {
-            Toggle("Three-finger navigation", isOn: optionalBoolBinding(\.trackpadNavigation, fallback: true))
+            Toggle("Trackpad navigation", isOn: optionalBoolBinding(\.trackpadNavigation, fallback: true))
 
-            Stepper(value: optionalIntBinding(\.trackpadNavigationFingers, fallback: 3), in: 2 ... 5) {
+            Stepper(value: optionalIntBinding(\.trackpadNavigationColumnFingers, fallback: 3), in: 2 ... 5) {
                 HStack {
-                    Text("Fingers")
+                    Text("Column fingers")
                     Spacer()
-                    Text("\(store.config.trackpadNavigationFingers ?? 3)")
+                    Text("\(store.config.trackpadNavigationColumnFingers ?? store.config.trackpadNavigationFingers ?? 3)")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+
+            Stepper(value: optionalIntBinding(\.trackpadNavigationWorkspaceFingers, fallback: 4), in: 2 ... 5) {
+                HStack {
+                    Text("Workspace fingers")
+                    Spacer()
+                    Text("\(store.config.trackpadNavigationWorkspaceFingers ?? 4)")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }

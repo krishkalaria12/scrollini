@@ -118,16 +118,16 @@ extension Scrollini {
         let shouldAnimate = animated && (previousState != targetState || !presentationFrames.isEmpty)
         let duration = shouldAnimate ? columnNavigationRetargetAnimationDuration : 0
         projectLayout(
-            focusActiveWindow: false,
+            focusActiveWindow: true,
             animated: shouldAnimate,
             from: previousState,
             animationDuration: duration,
             layoutLockDelay: 0.04,
-            prefocusActiveWindow: false,
+            prefocusActiveWindow: true,
             snapshotTiming: .deferred,
             verifyActiveLayout: false
         )
-        scheduleColumnNavigationFocus(after: duration + 0.025)
+        cancelColumnNavigationFocus()
     }
     func performColumnNavigation(by delta: Int) {
         guard !transientSystemWindowIsActive() else {
@@ -165,16 +165,16 @@ extension Scrollini {
         }
 
         projectLayout(
-            focusActiveWindow: false,
+            focusActiveWindow: true,
             animated: previousState != newState,
             from: previousState,
             animationDuration: duration,
             layoutLockDelay: 0.04,
-            prefocusActiveWindow: false,
+            prefocusActiveWindow: true,
             snapshotTiming: .deferred,
             verifyActiveLayout: false
         )
-        scheduleColumnNavigationFocus(after: duration + 0.025)
+        cancelColumnNavigationFocus()
     }
     func columnNavigationBurstIsActive(at now: CFAbsoluteTime, stepCount: Int) -> Bool {
         if animationTimer != nil

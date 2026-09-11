@@ -150,8 +150,18 @@ extension Scrollini {
         config.trackpadNavigation ?? ScrolliniConfig.fallback.trackpadNavigation ?? true
     }
 
-    var trackpadNavigationFingers: Int {
-        config.trackpadNavigationFingers ?? ScrolliniConfig.fallback.trackpadNavigationFingers ?? 3
+    var trackpadNavigationColumnFingers: Int {
+        config.trackpadNavigationColumnFingers
+            ?? config.trackpadNavigationFingers
+            ?? ScrolliniConfig.fallback.trackpadNavigationColumnFingers
+            ?? ScrolliniConfig.fallback.trackpadNavigationFingers
+            ?? 3
+    }
+
+    var trackpadNavigationWorkspaceFingers: Int {
+        config.trackpadNavigationWorkspaceFingers
+            ?? ScrolliniConfig.fallback.trackpadNavigationWorkspaceFingers
+            ?? 4
     }
 
     var trackpadNavigationSensitivity: CGFloat {
@@ -168,7 +178,7 @@ extension Scrollini {
             ?? trackpadNavigationSensitivity * 4
     }
 
-    /// How far a three-finger swipe travels before it commits to an axis, in trackpad-normalized
+    /// How far a trackpad swipe travels before it commits to its contact-count axis, in trackpad-normalized
     /// units where `1.0` is the full width of the trackpad.
     var trackpadNavigationDirectionLockThreshold: CGFloat {
         config.trackpadNavigationDirectionLockThreshold
@@ -205,7 +215,8 @@ extension Scrollini {
     var trackpadNavigationSettings: TrackpadNavigationSettings {
         TrackpadNavigationSettings(
             enabled: trackpadNavigationEnabled,
-            fingers: trackpadNavigationFingers,
+            columnFingers: trackpadNavigationColumnFingers,
+            workspaceFingers: trackpadNavigationWorkspaceFingers,
             invertX: trackpadNavigationInvertX,
             invertY: trackpadNavigationInvertY,
             // Baked into the recognizer at construction, so a change has to restart it.

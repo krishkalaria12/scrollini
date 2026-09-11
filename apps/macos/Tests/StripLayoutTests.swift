@@ -68,6 +68,8 @@ final class StripLayoutTests: XCTestCase {
         let frames = s.stripFrames(for: ws, viewport: testViewport, activeColumn: ws.activeColumn, scrollOffset: 0)
         XCTAssertEqual(frames.count, ws.columns.count)
         XCTAssertEqual(frames[0].minX, testViewport.minX + s.innerGap, accuracy: 0.001)
+        XCTAssertEqual(frames[0].minY, testViewport.minY, accuracy: 0.001)
+        XCTAssertEqual(frames[0].height, testViewport.height, accuracy: 0.001)
     }
 
     func testDefaultScrollOffsetAlignments() {
@@ -121,7 +123,7 @@ final class StripLayoutTests: XCTestCase {
         let after = s.parkedFrame(for: w, viewport: testViewport, beforeActive: false)
         XCTAssertEqual(before.minX, testViewport.minX - before.width + s.parkedSliverWidth, accuracy: 0.001)
         XCTAssertEqual(after.minX, testViewport.maxX - s.parkedSliverWidth, accuracy: 0.001)
-        XCTAssertEqual(before.height, testViewport.height - s.innerGap * 2, accuracy: 0.001)
+        XCTAssertEqual(before.height, testViewport.height, accuracy: 0.001)
     }
 
     func testEmptyWorkspaceMetrics() {

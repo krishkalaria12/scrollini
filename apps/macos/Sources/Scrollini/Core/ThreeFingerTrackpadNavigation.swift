@@ -91,19 +91,24 @@ private final class MultitouchSupport {
     }
 }
 
+/// Reads raw contact frames rather than AppKit gesture events. The system owns most multi-finger
+/// gestures, so keeping the contact count here lets Scrollini reserve three fingers for columns
+/// and four for workspaces without asking a horizontal swipe to compete with a vertical one.
 final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
     private struct GestureState {
         var active = false
+        var fingers = 0
         var lastCentroid = CGPoint.zero
         var lastTimestamp: CFAbsoluteTime = 0
         var velocity = CGPoint.zero
-        /// Travel since the gesture started, used to pick an axis once and then stay on it.
+        /// Travel since the gesture started, held until the movement is deliberate.
         var cumulative = CGPoint.zero
-        /// `nil` until the swipe has moved far enough to say which way it is going.
+        /// `nil` until the swipe has moved far enough to commit to its contact-count axis.
         var axis: TrackpadNavigationAxis?
     }
 
-    private let fingers: Int
+    private let columnFingers: Int
+    private let workspaceFingers: Int
     private let invertX: Bool
     private let invertY: Bool
     private let directionLockThreshold: CGFloat
@@ -117,13 +122,15 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
     nonisolated(unsafe) private static weak var active: ThreeFingerTrackpadNavigation?
 
     init(
-        fingers: Int,
+        columnFingers: Int,
+        workspaceFingers: Int,
         invertX: Bool,
         invertY: Bool,
         directionLockThreshold: CGFloat,
         onEvent: @escaping (TrackpadNavigationEvent) -> Void
     ) {
-        self.fingers = fingers
+        self.columnFingers = columnFingers
+        self.workspaceFingers = workspaceFingers
         self.invertX = invertX
         self.invertY = invertY
         self.directionLockThreshold = max(directionLockThreshold, 0.0001)
@@ -198,10 +205,26 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         let event: TrackpadNavigationEvent?
 
         lock.lock()
-        if count != fingers || touches == nil {
+        guard let allowedAxes = axes(forFingerCount: count), touches != nil else {
+            event = endGesture()
+            lock.unlock()
+            if let event {
+                onEvent(event)
+            }
+            return
+        }
+
+        if state.active, state.fingers != count {
+            // A finger joining or leaving ends the prior gesture. The next raw frame starts a
+            // fresh one, which prevents a three-finger strip scroll from turning into a workspace
+            // switch midway through the same touch.
             event = endGesture()
         } else {
-            event = updateGesture(touches: touches!.assumingMemoryBound(to: MTTouch.self), count: count)
+            event = updateGesture(
+                touches: touches!.assumingMemoryBound(to: MTTouch.self),
+                count: count,
+                allowedAxes: allowedAxes
+            )
         }
         lock.unlock()
 
@@ -210,11 +233,27 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         }
     }
 
-    private func updateGesture(touches: UnsafeMutablePointer<MTTouch>, count: Int) -> TrackpadNavigationEvent? {
+    private func axes(forFingerCount count: Int) -> [TrackpadNavigationAxis]? {
+        var axes: [TrackpadNavigationAxis] = []
+        if count == columnFingers {
+            axes.append(.horizontal)
+        }
+        if count == workspaceFingers {
+            axes.append(.vertical)
+        }
+        return axes.isEmpty ? nil : axes
+    }
+
+    private func updateGesture(
+        touches: UnsafeMutablePointer<MTTouch>,
+        count: Int,
+        allowedAxes: [TrackpadNavigationAxis]
+    ) -> TrackpadNavigationEvent? {
         let centroid = centroid(of: touches, count: count)
         let now = CFAbsoluteTimeGetCurrent()
         guard state.active else {
             state.active = true
+            state.fingers = count
             state.lastCentroid = centroid
             state.lastTimestamp = now
             state.velocity = .zero
@@ -243,9 +282,9 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         state.cumulative.y += deltaY
 
         // Hold everything back until the swipe has travelled far enough to read as deliberate,
-        // then commit to whichever axis it favours and release the travel banked so far. This is
-        // niri's direction lock: no finger is perfectly straight, and without it every swipe up
-        // also drags the column strip sideways.
+        // then release the travel banked so far. The number of contacts has already chosen the
+        // axis, which makes a three-finger column swipe and four-finger workspace swipe reliable
+        // even when the gesture is not perfectly straight.
         let axis: TrackpadNavigationAxis
         if let lockedAxis = state.axis {
             axis = lockedAxis
@@ -255,7 +294,9 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
                 return nil
             }
 
-            axis = abs(travel.x) > abs(travel.y) ? .horizontal : .vertical
+            axis = allowedAxes.count == 1 || abs(travel.x) > abs(travel.y)
+                ? allowedAxes[0]
+                : allowedAxes[1]
             state.axis = axis
             deltaX = travel.x
             deltaY = travel.y
@@ -317,6 +358,7 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
 
     private func resetGesture() {
         state.active = false
+        state.fingers = 0
         state.lastCentroid = .zero
         state.lastTimestamp = 0
         state.velocity = .zero

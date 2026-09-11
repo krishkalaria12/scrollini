@@ -37,6 +37,12 @@ final class ConfigNormalizationTests: XCTestCase {
         XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationFingers, 5)
         c.trackpadNavigationFingers = 1
         XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationFingers, 2)
+
+        c.trackpadNavigationColumnFingers = 99
+        c.trackpadNavigationWorkspaceFingers = 1
+        let normalized = ScrolliniConfig.normalize(c)
+        XCTAssertEqual(normalized.trackpadNavigationColumnFingers, 5)
+        XCTAssertEqual(normalized.trackpadNavigationWorkspaceFingers, 2)
     }
 
     func testAnimationClamps() {

@@ -69,6 +69,7 @@ extension Scrollini {
             .compactMap(normalizedKeybinding(_:)))
         appKeybindingExclusions = makeAppKeybindingExclusions()
         refreshFrontmostApplication()
+        configureGlobalHotkeys()
     }
 
     func makeAppKeybindingExclusions() -> [AppKeybindingExclusion] {
@@ -93,6 +94,7 @@ extension Scrollini {
         let app = NSWorkspace.shared.frontmostApplication
         frontmostAppBundleID = app?.bundleIdentifier
         frontmostAppName = app?.localizedName
+        refreshGlobalHotkeysForFrontmostApp()
     }
 
     func setKeybindingsPaused(_ paused: Bool) {
@@ -131,6 +133,12 @@ extension Scrollini {
         }
 
         guard !isExcludedKeybinding(modifiers: modifiers, keyCode: keyCode, keyText: keyText) else {
+            return false
+        }
+
+        if isRegisteredGlobalHotkey(modifiers: modifiers, keyCode: keyCode, keyText: keyText) {
+            // Carbon delivers registered hotkeys even while an app enables Secure Input. Let it
+            // own this chord so an ordinary app does not run the command twice through the tap.
             return false
         }
 

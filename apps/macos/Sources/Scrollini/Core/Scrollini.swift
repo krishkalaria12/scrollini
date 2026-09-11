@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import CoreGraphics
 import Darwin
 import Foundation
@@ -13,7 +14,8 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     struct TrackpadNavigationSettings: Equatable {
         var enabled: Bool
-        var fingers: Int
+        var columnFingers: Int
+        var workspaceFingers: Int
         var invertX: Bool
         var invertY: Bool
         var directionLockThreshold: CGFloat
@@ -59,6 +61,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var eventTapSource: CFRunLoopSource?
     var swallowedKeyUps = Set<Int64>()
     var commandByKeybinding: [String: Command] = [:]
+    var globalHotkeys: [GlobalHotkey] = []
+    var globalHotkeyBindings = Set<String>()
+    var globalHotkeyHandler: EventHandlerRef?
     var excludedKeybindingSet = Set<String>()
     var appKeybindingExclusions: [AppKeybindingExclusion] = []
     /// Frontmost app identity, cached from workspace activation notifications. Reading
@@ -98,7 +103,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var transientWindowStateCheckedAt: CFAbsoluteTime = 0
     var trackpadNavigation: ThreeFingerTrackpadNavigation?
     var trackpadCameraY: CGFloat?
-    /// Axis the in-flight three-finger swipe committed to, so the settle only lands that axis.
+    /// Axis the in-flight trackpad swipe committed to, so the settle only lands that axis.
     var trackpadCameraAxis: TrackpadNavigationAxis?
     var trackpadCameraVelocity = CGPoint.zero
     var trackpadPendingCameraDelta = CGSize.zero
@@ -168,9 +173,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
         if trackpadNavigationEnabled {
             if trackpadNavigation != nil {
-                print("scrollini: three-finger trackpad swipe navigates columns/workspaces")
+                print("scrollini: \(trackpadNavigationColumnFingers)-finger swipe scrolls columns; \(trackpadNavigationWorkspaceFingers)-finger swipe changes workspaces")
             } else {
-                print("scrollini: three-finger trackpad navigation unavailable; private MultitouchSupport backend did not start")
+                print("scrollini: trackpad navigation unavailable; private MultitouchSupport backend did not start")
             }
         }
         print("scrollini: Cmd-Tab is passed through and adopted after macOS focuses a window")

@@ -81,6 +81,11 @@ struct ScrolliniConfig: Codable {
     var excludedKeybindings: [String]?
     var keybindings: [String: [String]]?
     var trackpadNavigation: Bool?
+    /// Number of fingers used to scroll the horizontal column strip. When omitted, the legacy
+    /// `trackpad_navigation_fingers` value is used so existing configs keep their behavior.
+    var trackpadNavigationColumnFingers: Int?
+    /// Number of fingers used to move between virtual workspaces.
+    var trackpadNavigationWorkspaceFingers: Int?
     var trackpadNavigationFingers: Int?
     var trackpadNavigationSensitivity: CGFloat?
     var trackpadNavigationWorkspaceSensitivity: CGFloat?
@@ -128,6 +133,8 @@ struct ScrolliniConfig: Codable {
         excludedKeybindings: [],
         keybindings: defaultKeybindings,
         trackpadNavigation: true,
+        trackpadNavigationColumnFingers: 3,
+        trackpadNavigationWorkspaceFingers: 4,
         trackpadNavigationFingers: 3,
         trackpadNavigationSensitivity: 1.6,
         trackpadNavigationWorkspaceSensitivity: 6.4,
@@ -279,6 +286,8 @@ struct ScrolliniConfig: Codable {
         config.innerGap = config.innerGap.map { min(max($0, 0), 96) }
         config.outerGap = config.outerGap.map { min(max($0, 0), 96) }
         config.parkedSliverWidth = config.parkedSliverWidth.map { min(max($0, 0), 32) }
+        config.trackpadNavigationColumnFingers = config.trackpadNavigationColumnFingers.map { min(max($0, 2), 5) }
+        config.trackpadNavigationWorkspaceFingers = config.trackpadNavigationWorkspaceFingers.map { min(max($0, 2), 5) }
         config.trackpadNavigationFingers = config.trackpadNavigationFingers.map { min(max($0, 2), 5) }
         config.trackpadNavigationSensitivity = config.trackpadNavigationSensitivity.map { min(max($0, 0.1), 20) }
         config.trackpadNavigationWorkspaceSensitivity = config.trackpadNavigationWorkspaceSensitivity
@@ -369,6 +378,8 @@ struct ScrolliniConfig: Codable {
         case excludedKeybindings = "excluded_keybindings"
         case keybindings
         case trackpadNavigation = "trackpad_navigation"
+        case trackpadNavigationColumnFingers = "trackpad_navigation_column_fingers"
+        case trackpadNavigationWorkspaceFingers = "trackpad_navigation_workspace_fingers"
         case trackpadNavigationFingers = "trackpad_navigation_fingers"
         case trackpadNavigationSensitivity = "trackpad_navigation_sensitivity"
         case trackpadNavigationWorkspaceSensitivity = "trackpad_navigation_workspace_sensitivity"

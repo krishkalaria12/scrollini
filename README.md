@@ -88,7 +88,7 @@ terminal app itself to get those permissions.
 | `Ctrl+Opt+F` | Maximize the active column, or restore its previous width |
 | `Ctrl+Opt+Shift+R` | Reset the active column to its configured width |
 | three-finger swipe left / right | Scroll through columns |
-| three-finger swipe up / down | Switch workspace |
+| four-finger swipe up / down | Switch workspace |
 
 `Ctrl+Opt` focuses. `Ctrl+Opt+Shift` moves whatever `Ctrl+Opt` focuses. One modifier
 pair covers everything because `Ctrl+Opt` is the only two-modifier combination macOS
@@ -104,17 +104,17 @@ Five commands ship unbound and are yours to assign: `cycle_width_preset_backward
 both ends, so the backward binding is a convenience rather than a necessity.
 
 Trackpad navigation uses Apple's private MultitouchSupport framework so Scrollini can
-see raw three-finger movement without stealing normal two-finger scrolling. It
-moves a continuous camera with momentum, then focuses the workspace and column
-nearest the camera when the motion settles.
+see raw contact movement without stealing normal two-finger scrolling. Three fingers
+move through the horizontal column strip. Four fingers move between virtual
+workspaces. It moves a continuous camera with momentum, then focuses the workspace
+and column nearest the camera when the motion settles.
 
-Like Niri, a swipe commits to one axis and stays there. Scrollini waits until the
-fingers have travelled `trackpad_navigation_direction_lock_threshold` of the
-trackpad, picks horizontal or vertical from whichever way they moved further,
-and drives only that axis for the rest of the gesture — so a swipe up switches
-workspace without also dragging the column strip sideways. Vertical movement is
-more sensitive than horizontal by default, matching Niri's ratio of one
-workspace per quarter of the travel it takes to scroll one screen width.
+Scrollini waits until the fingers have travelled
+`trackpad_navigation_direction_lock_threshold` of the trackpad before moving.
+The contact count picks the direction, so a three-finger swipe only moves columns
+and a four-finger swipe only moves workspaces. Vertical movement is more sensitive
+than horizontal by default, matching Niri's ratio of one workspace per quarter of
+the travel it takes to scroll one screen width.
 
 ## Config
 
@@ -181,7 +181,8 @@ The repo includes a full default config. A compact version looks like this:
     "cycle_width_preset_backward": ["ctrl+alt+shift+f"]
   },
   "trackpad_navigation": true,
-  "trackpad_navigation_fingers": 3,
+  "trackpad_navigation_column_fingers": 3,
+  "trackpad_navigation_workspace_fingers": 4,
   "trackpad_navigation_sensitivity": 1.6,
   "trackpad_navigation_workspace_sensitivity": 6.4,
   "trackpad_navigation_direction_lock_threshold": 0.02,
@@ -260,6 +261,10 @@ Useful string settings:
 
 Useful trackpad numbers:
 
+- `trackpad_navigation_column_fingers`: contact count for horizontal column
+  navigation. Defaults to `3`.
+- `trackpad_navigation_workspace_fingers`: contact count for vertical workspace
+  navigation. Defaults to `4`.
 - `trackpad_navigation_sensitivity`: screen widths of column scrolling per full
   swipe across the trackpad
 - `trackpad_navigation_workspace_sensitivity`: workspaces per full swipe. Unset,
