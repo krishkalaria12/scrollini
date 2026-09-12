@@ -176,6 +176,8 @@ extension Scrollini {
             return
         }
 
+        prepareApplicationForLayout(window.pid)
+
         // A window that is only sliding needs one accessibility write, not the three
         // `setAXFrame` spends reconciling a simultaneous move and resize. Scrolling the strip is
         // exactly that case for every column on screen, every frame, so the size check is made

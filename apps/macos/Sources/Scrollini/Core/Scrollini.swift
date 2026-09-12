@@ -55,6 +55,11 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var activeWorkspace: Int = 0
     weak var previousWorkspace: Workspace?
     var observers: [pid_t: AXObserver] = [:]
+    /// Applications already considered for `AXEnhancedUserInterface`, and the subset that had it
+    /// switched off and is owed it back. Kept apart so an app that never had the flag set is not
+    /// re-probed on every frame it is moved.
+    var enhancedUIHandledPIDs = Set<pid_t>()
+    var enhancedUIDisabledPIDs = Set<pid_t>()
     var eventTap: CFMachPort?
     var eventTapSource: CFRunLoopSource?
     var swallowedKeyUps = Set<Int64>()

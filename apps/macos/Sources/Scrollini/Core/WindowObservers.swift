@@ -35,6 +35,7 @@ extension Scrollini {
     }
 
     func stopObservingApp(pid: pid_t) {
+        restoreEnhancedUserInterface(for: pid)
         guard let observer = observers.removeValue(forKey: pid) else {
             return
         }
