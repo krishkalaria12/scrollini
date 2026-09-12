@@ -30,8 +30,8 @@ extension Scrollini {
         )
         // Column origins live in a gap-free virtual strip, so the leading outer gap is added here
         // once rather than being baked into every origin.
-        // Horizontal gaps keep adjacent columns distinct. Vertical gaps waste working area and
-        // make tiled apps stop short of the menu bar and Dock, so columns fill the viewport.
+        // The viewport already excludes the menu bar and Dock. Gaps separate columns
+        // horizontally; applying them vertically wastes working height.
         let columnHeight = max(1, viewport.height)
         return workspace.columns.indices.map { index in
             CGRect(

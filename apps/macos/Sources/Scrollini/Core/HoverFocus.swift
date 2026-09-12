@@ -7,7 +7,22 @@ import SwiftUI
 
 extension Scrollini {
     func handleMouseMoved(_ event: CGEvent) {
-        guard hoverFocusEnabled,
+        guard hoverFocusEnabled else {
+            return
+        }
+
+        // A trackpad reports pointer movement faster than 120 times a second, and this runs
+        // inside the event tap callback, where overrunning the deadline costs the user their
+        // keybindings for the rest of the session. Sub-pixel jitter cannot change which column
+        // is under the pointer or which screen edge it is against, so it is dropped before
+        // anything else is asked. The threshold stays well under the edge trigger width.
+        let location = event.location
+        if hypot(location.x - lastHoverFocusPoint.x, location.y - lastHoverFocusPoint.y) < 1.5 {
+            return
+        }
+        lastHoverFocusPoint = location
+
+        guard
               !transientSystemWindowIsActive(),
               manualResizeElement == nil,
               animationTimer == nil,
@@ -25,7 +40,7 @@ extension Scrollini {
         // Resolved once. This runs inside the event tap callback on every pointer move, and
         // `hoverFocusTarget(at:)` projects the whole layout to answer, so asking it twice was
         // doubling the cost of the hottest path in the program.
-        guard let target = hoverFocusTarget(at: event.location) else {
+        guard let target = hoverFocusTarget(at: location) else {
             hoverFocusRequiresRearm = false
             cancelHoverFocus()
             return

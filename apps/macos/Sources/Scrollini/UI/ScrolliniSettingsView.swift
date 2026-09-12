@@ -327,6 +327,15 @@ struct ScrolliniSettingsView: View {
                 suffix: "ms"
             )
 
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle(
+                    "Place windows without animating",
+                    isOn: optionalBoolBinding(\.disableEnhancedUserInterface, fallback: true)
+                )
+                Text("Apps animate every window move an accessibility client asks for, which makes the strip trail your fingers. Turn this off if you use VoiceOver.")
+                    .settingsCaption()
+            }
+
             Toggle("Debug logging", isOn: optionalBoolBinding(\.debugLogging, fallback: false))
         }
     }

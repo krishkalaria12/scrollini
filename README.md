@@ -195,6 +195,7 @@ The repo includes a full default config. A compact version looks like this:
   "persist_layout": true,
   "state_path": null,
   "hide_method": "skylight_alpha",
+  "disable_enhanced_user_interface": true,
   "debug_logging": false,
   "rules": [
     {
@@ -253,6 +254,12 @@ Useful string settings:
 - `new_window_position` and rule `open_position`: `before_active`,
   `after_active`, or `end`
 - `hide_method`: `skylight_alpha` or `park_only`
+- `disable_enhanced_user_interface`: on by default. An app that an accessibility
+  client has attached to runs every window move as an animation, so scrolling
+  the strip leaves each column a few frames behind your fingers. Scrollini turns
+  that mode off for an app the first time it moves one of its windows and hands
+  it back when the app quits or scrollini exits. Set it to `false` if you use
+  VoiceOver or another assistive tool
 
 Useful trackpad numbers:
 

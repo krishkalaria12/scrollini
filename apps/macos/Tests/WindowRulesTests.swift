@@ -28,6 +28,32 @@ final class WindowRulesTests: XCTestCase {
         XCTAssertEqual(s.behavior(for: w2), .float)
     }
 
+    func testRetitlingRetiresTheCachedRuleAnswer() {
+        let s = Scrollini()
+        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(rules: [
+            WindowRule(titleContains: "Preferences", behavior: .float, widthRatio: 0.5)
+        ]), sourceURL: nil, sourceModificationDate: nil)
+        let w = makeWindow(30, title: "Inbox")
+        XCTAssertEqual(s.behavior(for: w), .tile)
+        w.title = "App Preferences"
+        XCTAssertEqual(s.behavior(for: w), .float)
+        XCTAssertEqual(s.widthRatio(for: w), 0.5, accuracy: 0.001)
+        w.title = "Inbox"
+        XCTAssertEqual(s.behavior(for: w), .tile)
+    }
+
+    func testReloadingConfigRetiresTheCachedRuleAnswer() {
+        let s = Scrollini()
+        let w = makeWindow(31, bundleID: "com.test.31")
+        XCTAssertEqual(s.behavior(for: w), .tile)
+        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(rules: [
+            WindowRule(bundleID: "com.test.31", behavior: .ignore, workspace: 2)
+        ]), sourceURL: nil, sourceModificationDate: nil)
+        s.configureInput()
+        XCTAssertEqual(s.behavior(for: w), .ignore)
+        XCTAssertEqual(s.workspace(for: w), 2)
+    }
+
     func testNoRuleYieldsDefaults() {
         let s = Scrollini()
         let w = makeWindow(20)

@@ -57,7 +57,7 @@ extension Scrollini {
             clearTrackpadCamera()
             return
         }
-        rescanWindows(adoptFocused: wasTransient)
+        rescanWindowsIfChanged(adoptFocused: wasTransient)
     }
     func requestAccessibilityPermission() -> Bool {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
@@ -117,6 +117,7 @@ extension Scrollini {
             refreshFrontmostApplication()
             return
         }
+        frontmostApplication = app
         frontmostAppBundleID = app.bundleIdentifier
         frontmostAppName = app.localizedName
         refreshGlobalHotkeysForFrontmostApp()
@@ -127,6 +128,10 @@ extension Scrollini {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler { [weak self] in
+                // Unconditional, unlike the window restore below it: `AXEnhancedUserInterface`
+                // belongs to the applications scrollini borrowed it from, and leaving it switched
+                // off after exit would degrade them for the rest of their run.
+                self?.restoreAllEnhancedUserInterface()
                 if self?.restoreOnExit == true {
                     self?.restoreManagedWindowsForExit()
                 }

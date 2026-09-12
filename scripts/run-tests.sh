@@ -20,9 +20,9 @@ echo "== swift build =="
 swift build --package-path "$macos_dir"
 
 echo ""
-echo "== self-check (308 invariants) =="
+echo "== self-check (325 invariants) =="
 "$macos_dir/.build/arm64-apple-macosx/debug/Scrollini" --self-check 2>&1 | tee /tmp/scrollini-self-check.log
-grep -q "308/308 checks passed" /tmp/scrollini-self-check.log
+grep -q "325/325 checks passed" /tmp/scrollini-self-check.log
 
 # Try swift test when XCTest is available (full Xcode). On CLT it will be 0 tests but should not fail.
 echo ""

@@ -114,20 +114,12 @@ final class StripLayoutTests: XCTestCase {
         let w = makeWindow(400); w.manualWidthRatio = 0.8
         let before = s.parkedFrame(for: w, viewport: testViewport, beforeActive: true)
         let after = s.parkedFrame(for: w, viewport: testViewport, beforeActive: false)
-        XCTAssertEqual(
-            before.maxX,
-            testViewport.minX - s.outerGap + s.parkedSliverWidth,
-            accuracy: 0.001
-        )
-        XCTAssertEqual(
-            after.minX,
-            testViewport.maxX + s.outerGap - s.parkedSliverWidth,
-            accuracy: 0.001
-        )
+        XCTAssertEqual(before.maxX, testViewport.minX - s.outerGap + s.parkedSliverWidth, accuracy: 0.001)
+        XCTAssertEqual(after.minX, testViewport.maxX + s.outerGap - s.parkedSliverWidth, accuracy: 0.001)
         XCTAssertEqual(before.height, testViewport.height, accuracy: 0.001)
     }
 
-    func testRightSideFocusKeepsOneNeighborPackedWithoutExposingOlderColumns() {
+    func testRightSideFocusParksOlderColumnsBeyondTheDisplayEdge() {
         let s = Scrollini()
         s.loadedConfig = LoadedScrolliniConfig(
             config: ScrolliniConfig(
@@ -147,8 +139,7 @@ final class StripLayoutTests: XCTestCase {
         workspace.activeColumn = 3
         s.workspaces = [workspace]
 
-        let state = s.captureLayoutState()
-        let items = s.layoutItems(viewport: viewport, state: state, parkHidden: true)
+        let items = s.layoutItems(viewport: viewport, state: s.captureLayoutState(), parkHidden: true)
 
         XCTAssertFalse(items[0].visible)
         XCTAssertFalse(items[1].visible)

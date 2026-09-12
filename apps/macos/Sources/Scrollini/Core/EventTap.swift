@@ -64,6 +64,7 @@ extension Scrollini {
         CGEvent.tapEnable(tap: eventTap, enable: true)
     }
     func configureInput() {
+        windowRuleRevision &+= 1
         commandByKeybinding = makeCommandByKeybinding()
         excludedKeybindingSet = Set((config.excludedKeybindings ?? ScrolliniConfig.fallback.excludedKeybindings ?? [])
             .compactMap(normalizedKeybinding(_:)))
@@ -92,9 +93,26 @@ extension Scrollini {
 
     func refreshFrontmostApplication() {
         let app = NSWorkspace.shared.frontmostApplication
+        frontmostApplication = app
         frontmostAppBundleID = app?.bundleIdentifier
         frontmostAppName = app?.localizedName
         refreshGlobalHotkeysForFrontmostApp()
+    }
+
+    func runningApplications() -> [NSRunningApplication] {
+        let now = CFAbsoluteTimeGetCurrent()
+        if !cachedRunningApplications.isEmpty, now - cachedRunningApplicationsAt < runningApplicationsCacheDuration {
+            return cachedRunningApplications
+        }
+        return refreshRunningApplications()
+    }
+
+    @discardableResult
+    func refreshRunningApplications() -> [NSRunningApplication] {
+        let apps = NSWorkspace.shared.runningApplications
+        cachedRunningApplications = apps
+        cachedRunningApplicationsAt = CFAbsoluteTimeGetCurrent()
+        return apps
     }
 
     func setKeybindingsPaused(_ paused: Bool) {

@@ -214,31 +214,61 @@ extension Scrollini {
             setWindowAlpha(0, for: item.window.windowID)
         }
 
-        // macOS can refuse a far-offscreen AX position and leave more of a parked window visible
-        // than requested. Put the real strip windows back above those parked fallbacks so an older
-        // column cannot draw over the visible neighbour at either edge. Raise the active column
-        // last without changing focus; requestFocus below still owns activation when requested.
-        if layout.contains(where: { !$0.visible }) {
-            let active = activeWindow()
-            for item in layout where item.visible && item.window !== active {
-                AXUIElementPerformAction(item.window.element, kAXRaiseAction as CFString)
-            }
-            if let activeItem = layout.first(where: { $0.visible && $0.window === active }) {
-                AXUIElementPerformAction(activeItem.window.element, kAXRaiseAction as CFString)
-            }
-        }
+        raiseVisibleWindowsAboveParked(layout)
 
         if let focusedWindow {
             requestFocus(focusedWindow, verify: verifyFocus, delay: focusDelay)
         }
     }
 
-    func restoreFloatingVisibility(raise: Bool = false, deferred: Bool = false) {
+    /// Some apps refuse positions far beyond the display edge. Keep the visible strip above those
+    /// parked fallbacks, but only touch z-order when the visible set or active window changes.
+    func raiseVisibleWindowsAboveParked(_ layout: [LayoutItem]) {
+        guard layout.contains(where: { !$0.visible }) else {
+            lastRaisedVisibleWindowOrder.removeAll(keepingCapacity: true)
+            return
+        }
+
+        let active = activeWindow()
+        var visible = layout.filter { $0.visible && $0.window !== active }
+        if let activeItem = layout.first(where: { $0.visible && $0.window === active }) {
+            visible.append(activeItem)
+        }
+
+        let order = visible.map { ObjectIdentifier($0.window) }
+        guard order != lastRaisedVisibleWindowOrder else {
+            return
+        }
+
+        lastRaisedVisibleWindowOrder = order
+        for item in visible {
+            AXUIElementPerformAction(item.window.element, kAXRaiseAction as CFString)
+        }
+    }
+
+    /// Alpha and window level are both cached, so re-asserting them costs nothing once they have
+    /// landed. Raising is not: `kAXRaiseAction` is a synchronous round trip into the owning app
+    /// every time it is asked for, and the non-animated layout path asks for it on every pass,
+    /// which during a trackpad scroll is once a frame per floating window. Raising is idempotent,
+    /// so it is rate limited here. `forceRaise` is for the re-assert chain that fires after a
+    /// focus change, whose whole purpose is to land at specific moments while the app settles.
+    func restoreFloatingVisibility(raise: Bool = false, deferred: Bool = false, forceRaise: Bool = false) {
+        guard !floatingWindows.isEmpty else {
+            return
+        }
+
         for window in floatingWindows {
             setWindowAlpha(1, for: window.windowID)
             setFloatingWindowLevel(for: window)
-            if raise {
-                AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+        }
+
+        if raise {
+            let now = CFAbsoluteTimeGetCurrent()
+            if forceRaise || now - lastFloatingRaiseAt >= floatingRaiseInterval {
+                lastFloatingRaiseAt = now
+                for window in floatingWindows {
+                    AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+                }
             }
         }
 
@@ -269,7 +299,7 @@ extension Scrollini {
                 else {
                     return
                 }
-                restoreFloatingVisibility(raise: true)
+                restoreFloatingVisibility(raise: true, forceRaise: true)
             }
         }
     }
@@ -312,6 +342,7 @@ extension Scrollini {
         appliedFrames.removeAll()
         appliedAlphas.removeAll()
         appliedWindowLevels.removeAll()
+        lastRaisedVisibleWindowOrder.removeAll()
     }
 
     func invalidateAppliedLayoutCache(for window: ManagedWindow) {
