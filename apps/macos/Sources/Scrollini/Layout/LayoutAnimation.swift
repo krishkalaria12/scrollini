@@ -197,7 +197,14 @@ extension Scrollini {
         }
 
         if succeeded {
-            appliedFrames[id] = frame
+            // A position-only write never touched the size, so the cache must keep the size that
+            // was actually last sent through `setAXFrame`. Advancing it to the requested size here
+            // would drift the cache away from the real window over a run of sub-0.5pt increments,
+            // and a later frame landing back on that fictitious size would skip a write that was
+            // never made.
+            appliedFrames[id] = sizeUnchanged
+                ? CGRect(origin: frame.origin, size: previousFrame?.size ?? frame.size)
+                : frame
         }
     }
 
