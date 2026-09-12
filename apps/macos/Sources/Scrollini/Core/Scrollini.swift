@@ -60,6 +60,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     /// re-probed on every frame it is moved.
     var enhancedUIHandledPIDs = Set<pid_t>()
     var enhancedUIDisabledPIDs = Set<pid_t>()
+    var enhancedUIRetryAfterByPID: [pid_t: CFAbsoluteTime] = [:]
     var eventTap: CFMachPort?
     var eventTapSource: CFRunLoopSource?
     var swallowedKeyUps = Set<Int64>()

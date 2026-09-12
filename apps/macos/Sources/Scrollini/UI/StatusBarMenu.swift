@@ -281,6 +281,7 @@ extension Scrollini {
     }
 
     @objc func quitFromStatusItem() {
+        restoreAllEnhancedUserInterface()
         restoreManagedWindowsForExit()
         exit(0)
     }

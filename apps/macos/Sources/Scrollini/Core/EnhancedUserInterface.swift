@@ -24,29 +24,42 @@ extension Scrollini {
     /// the first move and never again. Everything taken away here is handed back by
     /// `restoreEnhancedUserInterface(for:)` when the app quits or scrollini does.
     func prepareApplicationForLayout(_ pid: pid_t) {
-        guard disableEnhancedUserInterfaceEnabled, !enhancedUIHandledPIDs.contains(pid) else {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard disableEnhancedUserInterfaceEnabled,
+              !enhancedUIHandledPIDs.contains(pid),
+              now >= enhancedUIRetryAfterByPID[pid, default: 0]
+        else {
             return
         }
-        enhancedUIHandledPIDs.insert(pid)
 
         let appElement = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, enhancedUserInterfaceAttribute as CFString, &value) == .success,
-              value as? Bool == true
-        else {
+        guard AXUIElementCopyAttributeValue(appElement, enhancedUserInterfaceAttribute as CFString, &value) == .success else {
+            // Apps can briefly return cannotComplete while their accessibility tree is starting.
+            // Retry later without putting two failed AX calls into every animation frame.
+            enhancedUIRetryAfterByPID[pid] = now + 1
             return
         }
 
-        guard AXUIElementSetAttributeValue(appElement, enhancedUserInterfaceAttribute as CFString, kCFBooleanFalse) == .success
-        else {
+        guard value as? Bool == true else {
+            enhancedUIRetryAfterByPID.removeValue(forKey: pid)
+            enhancedUIHandledPIDs.insert(pid)
             return
         }
 
+        guard AXUIElementSetAttributeValue(appElement, enhancedUserInterfaceAttribute as CFString, kCFBooleanFalse) == .success else {
+            enhancedUIRetryAfterByPID[pid] = now + 1
+            return
+        }
+
+        enhancedUIRetryAfterByPID.removeValue(forKey: pid)
+        enhancedUIHandledPIDs.insert(pid)
         enhancedUIDisabledPIDs.insert(pid)
         debugLog("disabled AXEnhancedUserInterface for pid \(pid)")
     }
 
     func restoreEnhancedUserInterface(for pid: pid_t) {
+        enhancedUIRetryAfterByPID.removeValue(forKey: pid)
         enhancedUIHandledPIDs.remove(pid)
         guard enhancedUIDisabledPIDs.remove(pid) != nil else {
             return
@@ -65,5 +78,6 @@ extension Scrollini {
         }
         enhancedUIDisabledPIDs.removeAll()
         enhancedUIHandledPIDs.removeAll()
+        enhancedUIRetryAfterByPID.removeAll()
     }
 }
