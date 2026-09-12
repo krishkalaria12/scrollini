@@ -217,6 +217,18 @@ extension Scrollini {
         config.presetWidthRatios ?? ScrolliniConfig.fallback.presetWidthRatios ?? [0.5, 0.67, 0.8, 1.0]
     }
 
+    /// AppKit switches an application into `AXEnhancedUserInterface` as soon as an accessibility
+    /// client attaches to it, and with that flag set the app runs every position and size write
+    /// as an animated window move instead of an immediate one. Scrolling the strip issues one
+    /// position write per visible column per frame, so those animations queue behind each other
+    /// and the whole strip drags a few frames behind the fingers. Turning it back off for the
+    /// applications scrollini actually moves is what every tiling window manager on macOS does.
+    /// Set this to `false` if you run VoiceOver or another assistive tool that depends on the
+    /// enhanced interface being on.
+    var disableEnhancedUserInterfaceEnabled: Bool {
+        config.disableEnhancedUserInterface ?? ScrolliniConfig.fallback.disableEnhancedUserInterface ?? true
+    }
+
     var rescanInterval: TimeInterval {
         TimeInterval(config.rescanIntervalMS ?? ScrolliniConfig.fallback.rescanIntervalMS ?? 1000) / 1000
     }

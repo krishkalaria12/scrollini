@@ -75,7 +75,7 @@ extension Scrollini {
         hoverFocusRequiresRearm = false
         stopTrackpadMomentum()
         stopAnimation(clearPresentation: false)
-        rescanWindows(adoptFocused: false)
+        rescanWindowsIfChanged(adoptFocused: false, allowPeriodicFullSweep: false)
         resetTrackpadCameraMotion(clearCameraY: false)
         seedTrackpadCamera(viewport: currentViewport())
         startTrackpadRenderLoop()

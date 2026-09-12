@@ -84,6 +84,7 @@
   "persist_layout": true,
   "state_path": null,
   "hide_method": "skylight_alpha",
+  "disable_enhanced_user_interface": true,
   "debug_logging": false,
   "rules": [
     {

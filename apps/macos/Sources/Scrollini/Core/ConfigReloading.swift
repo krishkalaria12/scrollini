@@ -97,6 +97,10 @@ extension Scrollini {
         loadedConfig = newLoadedConfig
         configureInput()
 
+        if !disableEnhancedUserInterfaceEnabled {
+            restoreAllEnhancedUserInterface()
+        }
+
         if trackpadNavigationSettings != previousTrackpadSettings {
             restartTrackpadNavigation()
         }

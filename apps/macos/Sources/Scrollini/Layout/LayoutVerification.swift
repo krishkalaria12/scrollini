@@ -11,6 +11,16 @@ extension Scrollini {
     /// can only stay tight if it packs against what they granted.
     func scheduleColumnMeasurement(after delay: TimeInterval) {
         columnMeasurementGeneration &+= 1
+
+        // A scroll in flight lays out once a frame, and `measureColumnWidths` refuses to run
+        // while the trackpad drives the camera, so scheduling here would queue sixty blocks a
+        // second for the sole purpose of discarding them. The settle at the end of the gesture
+        // projects again with both timers already stopped, which is where the measurement
+        // belongs anyway.
+        guard trackpadRenderTimer == nil, trackpadMomentumTimer == nil else {
+            return
+        }
+
         let generation = columnMeasurementGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + max(delay, 0.02)) { [weak self] in
             self?.measureColumnWidths(generation: generation)

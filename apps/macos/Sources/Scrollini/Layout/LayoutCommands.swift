@@ -10,7 +10,6 @@ extension Scrollini {
         clearTrackpadCamera()
         cancelHoverFocus()
         hoverFocusRequiresRearm = false
-        rescanWindows(adoptFocused: false)
         let previousState = captureLayoutState()
         var animated = false
         var frameAnimated = false

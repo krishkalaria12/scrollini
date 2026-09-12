@@ -214,17 +214,61 @@ extension Scrollini {
             setWindowAlpha(0, for: item.window.windowID)
         }
 
+        raiseVisibleWindowsAboveParked(layout)
+
         if let focusedWindow {
             requestFocus(focusedWindow, verify: verifyFocus, delay: focusDelay)
         }
     }
 
-    func restoreFloatingVisibility(raise: Bool = false, deferred: Bool = false) {
+    /// Some apps refuse positions far beyond the display edge. Keep the visible strip above those
+    /// parked fallbacks, but only touch z-order when the visible set or active window changes.
+    func raiseVisibleWindowsAboveParked(_ layout: [LayoutItem]) {
+        guard layout.contains(where: { !$0.visible }) else {
+            lastRaisedVisibleWindowOrder.removeAll(keepingCapacity: true)
+            return
+        }
+
+        let active = activeWindow()
+        var visible = layout.filter { $0.visible && $0.window !== active }
+        if let activeItem = layout.first(where: { $0.visible && $0.window === active }) {
+            visible.append(activeItem)
+        }
+
+        let order = visible.map { ObjectIdentifier($0.window) }
+        guard order != lastRaisedVisibleWindowOrder else {
+            return
+        }
+
+        lastRaisedVisibleWindowOrder = order
+        for item in visible {
+            AXUIElementPerformAction(item.window.element, kAXRaiseAction as CFString)
+        }
+    }
+
+    /// Alpha and window level are both cached, so re-asserting them costs nothing once they have
+    /// landed. Raising is not: `kAXRaiseAction` is a synchronous round trip into the owning app
+    /// every time it is asked for, and the non-animated layout path asks for it on every pass,
+    /// which during a trackpad scroll is once a frame per floating window. Raising is idempotent,
+    /// so it is rate limited here. `forceRaise` is for the re-assert chain that fires after a
+    /// focus change, whose whole purpose is to land at specific moments while the app settles.
+    func restoreFloatingVisibility(raise: Bool = false, deferred: Bool = false, forceRaise: Bool = false) {
+        guard !floatingWindows.isEmpty else {
+            return
+        }
+
         for window in floatingWindows {
             setWindowAlpha(1, for: window.windowID)
             setFloatingWindowLevel(for: window)
-            if raise {
-                AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+        }
+
+        if raise {
+            let now = CFAbsoluteTimeGetCurrent()
+            if forceRaise || now - lastFloatingRaiseAt >= floatingRaiseInterval {
+                lastFloatingRaiseAt = now
+                for window in floatingWindows {
+                    AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+                }
             }
         }
 
@@ -255,7 +299,7 @@ extension Scrollini {
                 else {
                     return
                 }
-                restoreFloatingVisibility(raise: true)
+                restoreFloatingVisibility(raise: true, forceRaise: true)
             }
         }
     }
@@ -298,6 +342,7 @@ extension Scrollini {
         appliedFrames.removeAll()
         appliedAlphas.removeAll()
         appliedWindowLevels.removeAll()
+        lastRaisedVisibleWindowOrder.removeAll()
     }
 
     func invalidateAppliedLayoutCache(for window: ManagedWindow) {
@@ -332,6 +377,20 @@ extension Scrollini {
         let safeInset = min(inset, viewport.width / 3, viewport.height / 3)
         return viewport.insetBy(dx: safeInset, dy: safeInset)
     }
+
+    func insetViewportHorizontally(_ viewport: CGRect, by inset: CGFloat) -> CGRect {
+        guard inset > 0 else {
+            return viewport
+        }
+
+        let safeInset = min(inset, viewport.width / 3)
+        return CGRect(
+            x: viewport.minX + safeInset,
+            y: viewport.minY,
+            width: max(1, viewport.width - safeInset * 2),
+            height: viewport.height
+        )
+    }
     /// The working area scrollini lays out on, held briefly so one burst of work sees one
     /// viewport. Roughly twenty call sites ask for this, several of them per animation frame and
     /// per pointer move, and a layout pass that read two different answers halfway through would
@@ -361,13 +420,13 @@ extension Scrollini {
     /// window happens to be sitting.
     func computeViewport() -> CGRect {
         guard let screen = NSScreen.screens.first ?? NSScreen.main else {
-            return insetViewport(CGDisplayBounds(CGMainDisplayID()), by: outerGap)
+            return insetViewportHorizontally(CGDisplayBounds(CGMainDisplayID()), by: outerGap)
         }
 
         let visible = screen.visibleFrame
         let screenFrame = screen.frame
         let axY = screenFrame.maxY - visible.maxY
         let viewport = CGRect(x: visible.minX, y: axY, width: visible.width, height: visible.height)
-        return insetViewport(viewport, by: outerGap)
+        return insetViewportHorizontally(viewport, by: outerGap)
     }
 }

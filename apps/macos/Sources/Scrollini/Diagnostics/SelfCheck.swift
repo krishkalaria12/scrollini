@@ -106,6 +106,9 @@ enum SelfCheck {
         section("layout verification helpers")
         checkLayoutVerificationHelpers()
 
+        section("resolved rule cache")
+        checkResolvedRuleCacheInvalidation()
+
         print("")
         print("scrollini: \(checks - failures)/\(checks) checks passed")
         exit(failures == 0 ? 0 : 1)
@@ -217,6 +220,56 @@ enum SelfCheck {
         check("open position survives an earlier partial match", scrollini.openPosition(for: candidate) == .beforeActive)
         check("hover to focus survives an earlier partial match", scrollini.hoverToFocusAllowed(for: candidate) == false)
         check("width ratio survives an earlier partial match", approx(scrollini.widthRatio(for: candidate), 0.5))
+    }
+
+    /// Rule resolution is cached per window, so every input the answer depends on has to retire
+    /// the cache when it moves. A stale entry here is not a slow layout, it is the wrong one:
+    /// a window that gets retitled into a `title_contains` rule would keep the old behaviour for
+    /// as long as it lives.
+    private static func checkResolvedRuleCacheInvalidation() {
+        let scrollini = Scrollini()
+        func load(_ rules: [WindowRule]) {
+            scrollini.loadedConfig = LoadedScrolliniConfig(
+                config: ScrolliniConfig(defaultWidthRatio: 0.8, rules: rules),
+                sourceURL: nil,
+                sourceModificationDate: nil
+            )
+            scrollini.configureInput()
+        }
+
+        load([WindowRule(titleContains: "Preferences", behavior: .float, widthRatio: 0.5)])
+        let candidate = window(0)
+        check("untitled window does not match the rule", scrollini.behavior(for: candidate) == .tile)
+        check("untitled window keeps the default width", approx(scrollini.widthRatio(for: candidate), 0.8))
+
+        candidate.title = "App Preferences"
+        check("retitling into a rule takes effect", scrollini.behavior(for: candidate) == .float)
+        check("retitling into a rule updates the width", approx(scrollini.widthRatio(for: candidate), 0.5))
+
+        candidate.title = "Window 0"
+        check("retitling back out of a rule takes effect", scrollini.behavior(for: candidate) == .tile)
+
+        load([WindowRule(bundleID: "com.test.0", behavior: .ignore, workspace: 2)])
+        check("reloading the config retires cached answers", scrollini.behavior(for: candidate) == .ignore)
+        check("reloading the config retires cached workspaces", scrollini.workspace(for: candidate) == 2)
+
+        candidate.bundleID = "com.test.999"
+        check("changing bundle id retires cached answers", scrollini.behavior(for: candidate) == .tile)
+        check("changing bundle id retires cached workspaces", scrollini.workspace(for: candidate) == nil)
+
+        load([WindowRule(appName: "Renamed", hoverToFocus: false)])
+        check("hover to focus defaults to allowed", scrollini.hoverToFocusAllowed(for: candidate))
+        candidate.appName = "Renamed"
+        check("renaming the app retires cached answers", !scrollini.hoverToFocusAllowed(for: candidate))
+
+        // A manual width is read ahead of the rules, not cached alongside them.
+        load([WindowRule(bundleID: "com.test.1", widthRatio: 0.5)])
+        let manual = window(1)
+        check("rule width applies before a manual width is set", approx(scrollini.widthRatio(for: manual), 0.5))
+        manual.manualWidthRatio = 0.25
+        check("manual width overrides the cached rule width", approx(scrollini.widthRatio(for: manual), 0.25))
+        manual.manualWidthRatio = nil
+        check("clearing the manual width falls back to the rule", approx(scrollini.widthRatio(for: manual), 0.5))
     }
 
     private static func checkRuleMatchingEdgeCases() {
@@ -703,6 +756,8 @@ enum SelfCheck {
         let frames = s.stripFrames(for: ws, viewport: viewport, activeColumn: active, scrollOffset: 0)
         check("stripFrames count matches columns", frames.count == ws.columns.count)
         check("stripFrames first at viewport+gap", approx(frames[0].minX, viewport.minX + 12))
+        check("stripFrames use the viewport top", approx(frames[0].minY, viewport.minY))
+        check("stripFrames fill the viewport height", approx(frames[0].height, viewport.height))
 
         // horizontalCameraOffset respects scrollOffset when set
         ws.scrollOffset = 100
@@ -738,15 +793,31 @@ enum SelfCheck {
 
     private static func checkParkedFrames() {
         let s = Scrollini()
+        s.loadedConfig = LoadedScrolliniConfig(
+            config: ScrolliniConfig(outerGap: 12, parkedSliverWidth: 1),
+            sourceURL: nil,
+            sourceModificationDate: nil
+        )
         let w = window(400)
         w.manualWidthRatio = 0.8
         let before = s.parkedFrame(for: w, viewport: viewport, beforeActive: true)
         let after = s.parkedFrame(for: w, viewport: viewport, beforeActive: false)
         let sliver = s.parkedSliverWidth
-        check("parked before sits left of viewport", approx(before.minX, viewport.minX - before.width + sliver))
-        check("parked after sits right of viewport", approx(after.minX, viewport.maxX - sliver))
-        check("parked height respects innerGap", approx(before.height, viewport.height - s.innerGap * 2))
+        check("parked before sits at display edge", approx(before.maxX, viewport.minX - s.outerGap + sliver))
+        check("parked after sits at display edge", approx(after.minX, viewport.maxX + s.outerGap - sliver))
+        check("parked height fills viewport", approx(before.height, viewport.height))
         check("parked width matches layoutWidth", approx(before.width, s.layoutWidth(for: w, viewport: viewport)))
+
+        let insetViewport = CGRect(x: 12, y: viewport.minY, width: viewport.width - 24, height: viewport.height)
+        let workspace = Workspace()
+        workspace.columns = (0..<5).map(window)
+        workspace.activeColumn = 3
+        s.workspaces = [workspace]
+        let items = s.layoutItems(viewport: insetViewport, state: s.captureLayoutState(), parkHidden: true)
+        check("oldest left column is parked", !items[0].visible && approx(items[0].frame.maxX, 1))
+        check("second left column is parked", !items[1].visible && approx(items[1].frame.maxX, 1))
+        check("nearest left column remains visible", items[2].visible)
+        check("visible neighbors retain one gap", approx(items[3].frame.minX - items[2].frame.maxX, s.innerGap))
     }
 
     private static func checkCameraMath() {
@@ -768,6 +839,8 @@ enum SelfCheck {
         let hugeInset = s.insetViewport(viewport, by: 9999)
         check("insetViewport caps at 1/3 width", hugeInset.width > 0)
         check("insetViewport zero returns same", s.insetViewport(viewport, by: 0) == viewport)
+        let horizontalInset = s.insetViewportHorizontally(viewport, by: 20)
+        check("horizontal inset preserves height", approx(horizontalInset.height, viewport.height) && approx(horizontalInset.minY, viewport.minY))
     }
 
     private static func checkLayoutVisibility() {

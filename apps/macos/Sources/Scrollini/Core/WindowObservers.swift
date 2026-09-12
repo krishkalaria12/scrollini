@@ -35,6 +35,7 @@ extension Scrollini {
     }
 
     func stopObservingApp(pid: pid_t) {
+        restoreEnhancedUserInterface(for: pid)
         guard let observer = observers.removeValue(forKey: pid) else {
             return
         }
@@ -43,6 +44,16 @@ extension Scrollini {
     }
 
     func handleAXNotification(_ name: String, element: AXUIElement) {
+        // Our own frame writes generate moved and resized notifications. Discard them before the
+        // transient-window probe, which performs several synchronous AX reads and used to run for
+        // every window on every animation frame even though suppression rejected the event later.
+        if name == kAXWindowMovedNotification || name == kAXWindowResizedNotification,
+           manualResizeNotificationsSuppressed,
+           tiledWindow(for: element) != nil
+        {
+            return
+        }
+
         if transientSystemWindowIsActive(forceRefresh: true) {
             cancelHoverFocus()
             clearTrackpadCamera()
@@ -59,6 +70,11 @@ extension Scrollini {
             guard !shouldSuppressFocusedWindowAdoption else {
                 return
             }
+            // A focus change normally points at a window already in the model. Adopt it with one
+            // focused-window read and only pay for a full cross-application scan when it is new.
+            guard !adoptFocusedWindow(pid: pid, respectFocusSuppression: true) else {
+                return
+            }
             rescanWindows(adoptFocused: false)
             adoptFocusedWindow(pid: pid, respectFocusSuppression: true)
         case kAXCreatedNotification, kAXUIElementDestroyedNotification:
@@ -69,9 +85,6 @@ extension Scrollini {
                 return
             }
             guard location.workspaceIndex == activeWorkspace else {
-                return
-            }
-            guard !manualResizeNotificationsSuppressed else {
                 return
             }
             guard !systemFrameMatchesCurrentLayout(for: element) else {
@@ -88,9 +101,6 @@ extension Scrollini {
                 beginOrContinueManualResize(for: element)
             }
         case kAXWindowMovedNotification:
-            if manualResizeNotificationsSuppressed, tiledWindow(for: element) != nil {
-                return
-            }
             if let location = tiledWindowLocation(for: element), location.workspaceIndex != activeWorkspace {
                 return
             }

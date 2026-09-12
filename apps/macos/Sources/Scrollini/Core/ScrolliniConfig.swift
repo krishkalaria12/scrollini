@@ -98,6 +98,7 @@ struct ScrolliniConfig: Codable {
     var persistLayout: Bool?
     var statePath: String?
     var hideMethod: HideMethod?
+    var disableEnhancedUserInterface: Bool?
     var debugLogging: Bool?
     var rules: [WindowRule]?
 
@@ -145,6 +146,7 @@ struct ScrolliniConfig: Codable {
         persistLayout: true,
         statePath: nil,
         hideMethod: .skyLightAlpha,
+        disableEnhancedUserInterface: true,
         debugLogging: false,
         rules: [
             WindowRule(bundleID: "com.apple.finder", behavior: .float),
@@ -386,6 +388,7 @@ struct ScrolliniConfig: Codable {
         case persistLayout = "persist_layout"
         case statePath = "state_path"
         case hideMethod = "hide_method"
+        case disableEnhancedUserInterface = "disable_enhanced_user_interface"
         case debugLogging = "debug_logging"
         case rules
     }
