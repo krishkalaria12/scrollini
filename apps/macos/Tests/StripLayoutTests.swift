@@ -104,18 +104,6 @@ final class StripLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(s.horizontalCameraOffset(for: ws, viewport: testViewport), s.maxHorizontalCameraOffset(for: ws, viewport: testViewport))
     }
 
-    func testClosestAndMostVisibleColumn() {
-        let s = Scrollini()
-        let (model, _) = makeScrolliniWithModel()
-        let ws = model.workspaces[0]
-        s.cachedViewport = testViewport; s.cachedViewportAt = CFAbsoluteTimeGetCurrent()
-        let off = s.horizontalCameraOffset(for: ws, viewport: testViewport)
-        let closest = s.closestColumn(to: off, in: ws, viewport: testViewport)
-        XCTAssertTrue((0..<ws.columns.count).contains(closest))
-        let most = s.mostVisibleColumn(in: ws, viewport: testViewport, scrollOffset: off)
-        XCTAssertTrue((0..<ws.columns.count).contains(most))
-    }
-
     func testParkedFrames() {
         let s = Scrollini()
         s.loadedConfig = LoadedScrolliniConfig(
@@ -176,7 +164,6 @@ final class StripLayoutTests: XCTestCase {
         let ws = Workspace()
         XCTAssertEqual(s.stripMetrics(for: ws, viewport: testViewport).origins.count, 0)
         XCTAssertEqual(s.maxHorizontalCameraOffset(for: ws, viewport: testViewport), 0)
-        XCTAssertEqual(s.closestColumn(to: 0, in: ws, viewport: testViewport), 0)
     }
 }
 

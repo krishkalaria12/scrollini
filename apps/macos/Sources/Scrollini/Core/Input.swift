@@ -116,15 +116,11 @@ enum Command {
     case resetColumnWidth
 }
 
-/// Which axis a trackpad gesture drives. The contact count picks it before motion begins, so a
-/// column swipe cannot also drag the workspace camera.
-enum TrackpadNavigationAxis {
-    case horizontal
-    case vertical
-}
-
+/// Trackpad navigation drives workspaces only, so every delta and velocity here is vertical, in
+/// trackpad-normalized units where `1.0` is the full height of the trackpad. `moved` says whether
+/// the swipe ever travelled far enough to read as deliberate and move the camera.
 enum TrackpadNavigationEvent {
     case began
-    case changed(axis: TrackpadNavigationAxis, delta: CGPoint, velocity: CGPoint)
-    case ended(axis: TrackpadNavigationAxis?, velocity: CGPoint)
+    case changed(delta: CGFloat, velocity: CGFloat)
+    case ended(moved: Bool, velocity: CGFloat)
 }

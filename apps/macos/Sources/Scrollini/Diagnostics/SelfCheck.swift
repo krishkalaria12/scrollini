@@ -447,8 +447,6 @@ enum SelfCheck {
         wild.innerGap = 5000
         wild.outerGap = -20
         wild.rescanIntervalMS = 5
-        wild.trackpadNavigationFingers = 99
-        wild.trackpadNavigationColumnFingers = 99
         wild.trackpadNavigationWorkspaceFingers = 1
         wild.presetWidthRatios = [3.0, 0.5, 0.5, -1.0]
 
@@ -456,8 +454,6 @@ enum SelfCheck {
         check("inner gap clamps to its ceiling", normalized.innerGap == 96)
         check("outer gap clamps to zero", normalized.outerGap == 0)
         check("rescan interval clamps to its floor", normalized.rescanIntervalMS == 100)
-        check("finger count clamps to five", normalized.trackpadNavigationFingers == 5)
-        check("column finger count clamps to five", normalized.trackpadNavigationColumnFingers == 5)
         check("workspace finger count clamps to two", normalized.trackpadNavigationWorkspaceFingers == 2)
         check("presets come back sorted, clamped and deduplicated", normalized.presetWidthRatios == [0.05, 0.5, 2.0])
     }
@@ -473,7 +469,6 @@ enum SelfCheck {
         c.hoverFocusEdgeTriggerWidth = 200
         c.hoverFocusAfterTrackpadMS = 9999
         c.parkedSliverWidth = 100
-        c.trackpadNavigationSensitivity = 999
         c.trackpadNavigationWorkspaceSensitivity = -1
         c.trackpadNavigationDirectionLockThreshold = 9
         c.trackpadNavigationDeceleration = 100
@@ -491,7 +486,6 @@ enum SelfCheck {
         check("hoverFocusEdgeTriggerWidth clamps to 96", n.hoverFocusEdgeTriggerWidth == 96)
         check("hoverFocusAfterTrackpadMS clamps to 2000", n.hoverFocusAfterTrackpadMS == 2000)
         check("parkedSliver clamps to 32", n.parkedSliverWidth == 32)
-        check("trackpad sensitivity clamps to 20", n.trackpadNavigationSensitivity == 20)
         check("workspace sensitivity clamps to 0.1 when negative", n.trackpadNavigationWorkspaceSensitivity == 0.1)
         check("directionLock clamps to 0.5", n.trackpadNavigationDirectionLockThreshold == 0.5)
         check("deceleration clamps to 30", n.trackpadNavigationDeceleration == 30)
@@ -718,12 +712,9 @@ enum SelfCheck {
         check("horizontalCameraOffset clamps to max", s.horizontalCameraOffset(for: ws, viewport: viewport) <= s.maxHorizontalCameraOffset(for: ws, viewport: viewport))
         ws.scrollOffset = nil
 
-        // closestColumn and mostVisibleColumn
+        // with no pinned offset the camera follows the active column
         let off = s.horizontalCameraOffset(for: ws, viewport: viewport)
-        let closest = s.closestColumn(to: off, in: ws, viewport: viewport)
-        check("closestColumn near active", closest == active || closest == active - 1 || closest == active + 1)
-        let mostVisible = s.mostVisibleColumn(in: ws, viewport: viewport, scrollOffset: off)
-        check("mostVisibleColumn in bounds", (0..<ws.columns.count).contains(mostVisible))
+        check("horizontalCameraOffset in range without scrollOffset", off >= 0 && off <= s.maxHorizontalCameraOffset(for: ws, viewport: viewport))
     }
 
     private static func checkCameraOffsets() {
@@ -731,8 +722,6 @@ enum SelfCheck {
         let ws = Workspace()
         ws.columns = [] // empty
         check("maxHorizontalCameraOffset empty is 0", s.maxHorizontalCameraOffset(for: ws, viewport: viewport) == 0)
-        check("closestColumn empty is 0", s.closestColumn(to: 0, in: ws, viewport: viewport) == 0)
-        check("mostVisibleColumn empty is 0", s.mostVisibleColumn(in: ws, viewport: viewport, scrollOffset: 0) == 0)
         // single column
         let w = window(300); w.manualWidthRatio = 0.8
         ws.columns = [w]
@@ -954,14 +943,14 @@ enum SelfCheck {
 
     private static func checkTrackpadSensitivityFallback() {
         let s = Scrollini()
-        // fallback trackpadNavigationWorkspaceSensitivity is 6.4 (1.6*4), so with no explicit it returns fallback not computed
-        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationSensitivity: 2.0), sourceURL: nil, sourceModificationDate: nil)
+        // an empty config falls through to the shipped fallback rather than to the accessor's own
+        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(), sourceURL: nil, sourceModificationDate: nil)
         check("workspaceSensitivity returns fallback 6.4 when no explicit", approx(s.trackpadNavigationWorkspaceSensitivity, 6.4))
-        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationSensitivity: 2.0, trackpadNavigationWorkspaceSensitivity: 5.0), sourceURL: nil, sourceModificationDate: nil)
+        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationWorkspaceSensitivity: 5.0), sourceURL: nil, sourceModificationDate: nil)
         check("workspaceSensitivity explicit wins", approx(s.trackpadNavigationWorkspaceSensitivity, 5.0))
         // default without any config
         let sDefault = Scrollini()
-        check("workspaceSensitivity default is 6.4 == 1.6*4", approx(sDefault.trackpadNavigationWorkspaceSensitivity, 6.4))
+        check("workspaceSensitivity default is 6.4", approx(sDefault.trackpadNavigationWorkspaceSensitivity, 6.4))
         s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(hoverFocusAfterTrackpadMS: 100, trackpadNavigationHoverSuppressionMS: 999), sourceURL: nil, sourceModificationDate: nil)
         check("hoverFocusAfterTrackpad prefers navigationSpecific when not fallback", approx(s.hoverFocusAfterTrackpad, 0.999))
     }
@@ -1175,38 +1164,36 @@ enum SelfCheck {
 
     private static func checkTrackpadPhysics() {
         let s = Scrollini()
-        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationSensitivity: 1.6, trackpadNavigationWorkspaceSensitivity: 6.4, trackpadNavigationVelocityGain: 1.35), sourceURL: nil, sourceModificationDate: nil)
-        let delta = s.trackpadCameraDelta(from: CGPoint(x: 0.01, y: 0.02), velocity: CGPoint(x: 0, y: 0), viewport: viewport)
-        check("trackpadCameraDelta width negative delta.x", delta.width < 0)
-        check("trackpadCameraDelta height positive delta.y", delta.height > 0)
-        // trackpadCameraVelocity(with:) is shadowed by stored property of same name on instance; test gain instead
-        let gainSlow = s.trackpadCameraVelocityGain(for: CGPoint(x: 0.1, y: 0.1))
-        let gainFast = s.trackpadCameraVelocityGain(for: CGPoint(x: 2, y: 2))
+        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationWorkspaceSensitivity: 6.4, trackpadNavigationVelocityGain: 1.35), sourceURL: nil, sourceModificationDate: nil)
+        check("trackpadCameraDelta follows the swipe down", s.trackpadCameraDelta(from: 0.02, velocity: 0, viewport: viewport) > 0)
+        check("trackpadCameraDelta follows the swipe up", s.trackpadCameraDelta(from: -0.02, velocity: 0, viewport: viewport) < 0)
+        // trackpadCameraVelocity(from:viewport:) is shadowed by the stored property of the same
+        // name on the instance, so the gain it applies is what gets checked here.
+        let gainSlow = s.trackpadCameraVelocityGain(for: 0.1)
+        let gainFast = s.trackpadCameraVelocityGain(for: 2)
         check("velocityGain increases with speed", gainFast >= gainSlow)
+        check("velocityGain ignores direction", approx(s.trackpadCameraVelocityGain(for: -2), gainFast))
         check("velocityGain caps at 1+cfg", gainFast <= 1 + (s.trackpadNavigationVelocityGain))
         check("hasPendingDelta false initially", s.hasPendingTrackpadCameraDelta == false)
-        s.trackpadPendingCameraDelta = CGSize(width: 0.6, height: 0)
+        s.trackpadPendingCameraDelta = 0.6
         check("hasPendingDelta true at 0.6", s.hasPendingTrackpadCameraDelta == true)
-        s.trackpadPendingCameraDelta = .zero
-        s.trackpadCameraVelocity = CGPoint(x: 10, y: 0)
+        s.trackpadPendingCameraDelta = 0
+        s.trackpadCameraVelocity = 10
         check("hasMomentum false at 10", s.hasTrackpadMomentumVelocity == false)
-        s.trackpadCameraVelocity = CGPoint(x: 100, y: 0)
+        s.trackpadCameraVelocity = 100
         check("hasMomentum true at 100", s.hasTrackpadMomentumVelocity == true)
-        s.trackpadCameraVelocity = .zero
+        s.trackpadCameraVelocity = 0
         // strongest velocity picks larger
-        s.trackpadLatestCameraVelocity = CGPoint(x: 50, y: 0)
-        let strongest = s.strongestTrackpadCameraVelocity(endingVelocity: CGPoint(x: 30, y: 0))
-        check("strongest picks larger earlier", strongest.x == 50)
-        let strongest2 = s.strongestTrackpadCameraVelocity(endingVelocity: CGPoint(x: 60, y: 0))
-        check("strongest picks larger ending", strongest2.x == 60)
+        s.trackpadLatestCameraVelocity = 50
+        check("strongest picks larger earlier", s.strongestTrackpadCameraVelocity(endingVelocity: 30) == 50)
+        check("strongest picks larger ending", s.strongestTrackpadCameraVelocity(endingVelocity: 60) == 60)
         // apply delta clamping
         _ = buildModel(s)
         s.trackpadCameraY = nil
-        s.workspaces[0].scrollOffset = nil
         s.cachedViewport = viewport
         s.cachedViewportAt = CFAbsoluteTimeGetCurrent()
-        let clamped = s.applyTrackpadCameraDelta(CGSize(width: 10000, height: 10000), viewport: viewport)
-        check("applyTrackpadCameraDelta clamps", clamped.x == true || clamped.y == true)
+        check("applyTrackpadCameraDelta clamps", s.applyTrackpadCameraDelta(10000, viewport: viewport) == true)
+        check("applyTrackpadCameraDelta reports room to move", s.applyTrackpadCameraDelta(-viewport.height, viewport: viewport) == false)
     }
 
     private static func checkConfigJSONLoading() {

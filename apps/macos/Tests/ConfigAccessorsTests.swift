@@ -65,9 +65,9 @@ final class ConfigAccessorsTests: XCTestCase {
 
     func testTrackpadSensitivityFallback() {
         let s = Scrollini()
-        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationSensitivity: 2.0), sourceURL: nil, sourceModificationDate: nil)
+        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(), sourceURL: nil, sourceModificationDate: nil)
         XCTAssertEqual(s.trackpadNavigationWorkspaceSensitivity, 6.4, accuracy: 0.001) // fallback is 6.4
-        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationSensitivity: 2.0, trackpadNavigationWorkspaceSensitivity: 5.0), sourceURL: nil, sourceModificationDate: nil)
+        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationWorkspaceSensitivity: 5.0), sourceURL: nil, sourceModificationDate: nil)
         XCTAssertEqual(s.trackpadNavigationWorkspaceSensitivity, 5.0, accuracy: 0.001)
         XCTAssertEqual(Scrollini().trackpadNavigationWorkspaceSensitivity, 6.4, accuracy: 0.001)
     }

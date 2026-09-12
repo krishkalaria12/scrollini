@@ -150,36 +150,24 @@ extension Scrollini {
         config.trackpadNavigation ?? ScrolliniConfig.fallback.trackpadNavigation ?? true
     }
 
-    var trackpadNavigationColumnFingers: Int {
-        config.trackpadNavigationColumnFingers
-            ?? config.trackpadNavigationFingers
-            ?? ScrolliniConfig.fallback.trackpadNavigationColumnFingers
-            ?? ScrolliniConfig.fallback.trackpadNavigationFingers
-            ?? 3
-    }
-
     var trackpadNavigationWorkspaceFingers: Int {
         config.trackpadNavigationWorkspaceFingers
             ?? ScrolliniConfig.fallback.trackpadNavigationWorkspaceFingers
             ?? 4
     }
 
-    var trackpadNavigationSensitivity: CGFloat {
-        config.trackpadNavigationSensitivity ?? ScrolliniConfig.fallback.trackpadNavigationSensitivity ?? 1.6
-    }
-
-    /// Vertical sensitivity. niri needs a quarter of the finger travel to change workspace that it
-    /// needs to scroll one screen width of columns (`WORKSPACE_GESTURE_MOVEMENT` 300 against
-    /// `VIEW_GESTURE_WORKING_AREA_MOVEMENT` 1200), which is what makes a swipe up feel like a flick
-    /// rather than a haul. Defaults to that same 4:1 ratio against the horizontal sensitivity.
+    /// Workspaces per full swipe up or down the trackpad. The 6.4 default is niri's feel: it takes
+    /// a quarter of the finger travel to change workspace that niri needs to scroll one screen
+    /// width (`WORKSPACE_GESTURE_MOVEMENT` 300 against `VIEW_GESTURE_WORKING_AREA_MOVEMENT` 1200),
+    /// which is what makes a swipe up land like a flick rather than a haul.
     var trackpadNavigationWorkspaceSensitivity: CGFloat {
         config.trackpadNavigationWorkspaceSensitivity
             ?? ScrolliniConfig.fallback.trackpadNavigationWorkspaceSensitivity
-            ?? trackpadNavigationSensitivity * 4
+            ?? 6.4
     }
 
-    /// How far a trackpad swipe travels before it commits to its contact-count axis, in trackpad-normalized
-    /// units where `1.0` is the full width of the trackpad.
+    /// How far a swipe travels before it moves the camera at all, in trackpad-normalized units
+    /// where `1.0` is the full width of the trackpad.
     var trackpadNavigationDirectionLockThreshold: CGFloat {
         config.trackpadNavigationDirectionLockThreshold
             ?? ScrolliniConfig.fallback.trackpadNavigationDirectionLockThreshold
@@ -200,14 +188,6 @@ extension Scrollini {
         config.trackpadNavigationVelocityGain ?? ScrolliniConfig.fallback.trackpadNavigationVelocityGain ?? 1.35
     }
 
-    var trackpadNavigationSnap: TrackpadNavigationSnap {
-        config.trackpadNavigationSnap ?? ScrolliniConfig.fallback.trackpadNavigationSnap ?? .nearestColumn
-    }
-
-    var trackpadNavigationInvertX: Bool {
-        config.trackpadNavigationInvertX ?? ScrolliniConfig.fallback.trackpadNavigationInvertX ?? false
-    }
-
     var trackpadNavigationInvertY: Bool {
         config.trackpadNavigationInvertY ?? ScrolliniConfig.fallback.trackpadNavigationInvertY ?? false
     }
@@ -215,9 +195,7 @@ extension Scrollini {
     var trackpadNavigationSettings: TrackpadNavigationSettings {
         TrackpadNavigationSettings(
             enabled: trackpadNavigationEnabled,
-            columnFingers: trackpadNavigationColumnFingers,
             workspaceFingers: trackpadNavigationWorkspaceFingers,
-            invertX: trackpadNavigationInvertX,
             invertY: trackpadNavigationInvertY,
             // Baked into the recognizer at construction, so a change has to restart it.
             directionLockThreshold: trackpadNavigationDirectionLockThreshold

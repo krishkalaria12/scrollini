@@ -63,15 +63,3 @@ extension HoverFocusMode: CaseIterable {
         }
     }
 }
-
-extension TrackpadNavigationSnap: CaseIterable {
-    static var allCases: [TrackpadNavigationSnap] { [.nearestColumn, .nearestVisible, .none] }
-
-    var displayName: String {
-        switch self {
-        case .nearestColumn: "Nearest column"
-        case .nearestVisible: "Nearest visible"
-        case .none: "None"
-        }
-    }
-}

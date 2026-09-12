@@ -12,9 +12,7 @@ extension Scrollini {
         }
 
         let navigation = ThreeFingerTrackpadNavigation(
-            columnFingers: trackpadNavigationColumnFingers,
-            workspaceFingers: trackpadNavigationWorkspaceFingers,
-            invertX: trackpadNavigationInvertX,
+            fingers: trackpadNavigationWorkspaceFingers,
             invertY: trackpadNavigationInvertY,
             directionLockThreshold: trackpadNavigationDirectionLockThreshold
         ) { [weak self] event in
@@ -45,16 +43,13 @@ extension Scrollini {
         switch event {
         case .began:
             beginTrackpadCamera()
-        case let .changed(axis, delta, velocity):
-            moveTrackpadCamera(axis: axis, delta: delta, velocity: velocity)
-        case let .ended(axis, velocity):
-            guard axis != nil else {
-                // The swipe never committed to an axis, so there is nothing to settle. Starting
-                // the gesture pinned the strip's scroll offset, though, so release it and let the
-                // focused column drive the view again.
-                if trackpadNavigationSnap == .nearestColumn {
-                    activeWorkspaceObject()?.scrollOffset = nil
-                }
+        case let .changed(delta, velocity):
+            moveTrackpadCamera(delta: delta, velocity: velocity)
+        case let .ended(moved, velocity):
+            guard moved else {
+                // The swipe never travelled far enough to move the camera, so there is no
+                // workspace to settle on. Beginning the gesture still froze the camera, so
+                // release it.
                 clearTrackpadCamera()
                 projectLayout(focusActiveWindow: false, layoutLockDelay: 0.02)
                 return
@@ -82,7 +77,7 @@ extension Scrollini {
         startTrackpadRenderLoop()
     }
 
-    func moveTrackpadCamera(axis: TrackpadNavigationAxis, delta: CGPoint, velocity: CGPoint) {
+    func moveTrackpadCamera(delta: CGFloat, velocity: CGFloat) {
         guard manualResizeElement == nil else {
             return
         }
@@ -90,16 +85,13 @@ extension Scrollini {
         suppressHoverFocusAfterTrackpadMovement()
         let viewport = currentViewport()
         seedTrackpadCamera(viewport: viewport)
-        let cameraDelta = trackpadCameraDelta(from: delta, velocity: velocity, viewport: viewport)
-        trackpadPendingCameraDelta.width += cameraDelta.width
-        trackpadPendingCameraDelta.height += cameraDelta.height
+        trackpadPendingCameraDelta += trackpadCameraDelta(from: delta, velocity: velocity, viewport: viewport)
         trackpadLatestCameraVelocity = trackpadCameraVelocity(from: velocity, viewport: viewport)
         trackpadCameraVelocity = trackpadLatestCameraVelocity
-        trackpadCameraAxis = axis
         startTrackpadRenderLoop()
     }
 
-    func endTrackpadCamera(velocity: CGPoint) {
+    func endTrackpadCamera(velocity: CGFloat) {
         suppressHoverFocusAfterTrackpadMovement()
         flushTrackpadCameraFrame()
         stopTrackpadRenderLoop()
@@ -116,53 +108,35 @@ extension Scrollini {
         startTrackpadMomentum()
     }
 
-    func trackpadCameraDelta(from delta: CGPoint, velocity: CGPoint, viewport: CGRect) -> CGSize {
-        let multiplier = trackpadCameraVelocityGain(for: velocity)
-        return CGSize(
-            width: -delta.x * viewport.width * trackpadNavigationSensitivity * multiplier,
-            height: delta.y * viewport.height * trackpadNavigationWorkspaceSensitivity * multiplier
-        )
+    func trackpadCameraDelta(from delta: CGFloat, velocity: CGFloat, viewport: CGRect) -> CGFloat {
+        delta * viewport.height * trackpadNavigationWorkspaceSensitivity * trackpadCameraVelocityGain(for: velocity)
     }
 
-    func trackpadCameraVelocity(from velocity: CGPoint, viewport: CGRect) -> CGPoint {
-        let multiplier = trackpadCameraVelocityGain(for: velocity)
-        return CGPoint(
-            x: -velocity.x * viewport.width * trackpadNavigationSensitivity * multiplier,
-            y: velocity.y * viewport.height * trackpadNavigationWorkspaceSensitivity * multiplier
-        )
+    func trackpadCameraVelocity(from velocity: CGFloat, viewport: CGRect) -> CGFloat {
+        velocity * viewport.height * trackpadNavigationWorkspaceSensitivity * trackpadCameraVelocityGain(for: velocity)
     }
 
-    func trackpadCameraVelocityGain(for velocity: CGPoint) -> CGFloat {
-        let speed = hypot(velocity.x, velocity.y)
-        let extra = min(max((speed - 0.35) / 1.4, 0), trackpadNavigationVelocityGain)
+    func trackpadCameraVelocityGain(for velocity: CGFloat) -> CGFloat {
+        let extra = min(max((abs(velocity) - 0.35) / 1.4, 0), trackpadNavigationVelocityGain)
         return 1 + extra
     }
 
     var hasPendingTrackpadCameraDelta: Bool {
-        abs(trackpadPendingCameraDelta.width) >= 0.5 || abs(trackpadPendingCameraDelta.height) >= 0.5
+        abs(trackpadPendingCameraDelta) >= 0.5
     }
 
     var hasTrackpadMomentumVelocity: Bool {
-        abs(trackpadCameraVelocity.x) >= trackpadNavigationMomentumMinVelocity
-            || abs(trackpadCameraVelocity.y) >= trackpadNavigationMomentumMinVelocity
+        abs(trackpadCameraVelocity) >= trackpadNavigationMomentumMinVelocity
     }
 
-    func strongestTrackpadCameraVelocity(endingVelocity: CGPoint) -> CGPoint {
-        CGPoint(
-            x: abs(endingVelocity.x) >= abs(trackpadLatestCameraVelocity.x)
-                ? endingVelocity.x
-                : trackpadLatestCameraVelocity.x,
-            y: abs(endingVelocity.y) >= abs(trackpadLatestCameraVelocity.y)
-                ? endingVelocity.y
-                : trackpadLatestCameraVelocity.y
-        )
+    func strongestTrackpadCameraVelocity(endingVelocity: CGFloat) -> CGFloat {
+        abs(endingVelocity) >= abs(trackpadLatestCameraVelocity) ? endingVelocity : trackpadLatestCameraVelocity
     }
 
     func resetTrackpadCameraMotion(clearCameraY: Bool) {
-        trackpadPendingCameraDelta = .zero
-        trackpadLatestCameraVelocity = .zero
-        trackpadCameraVelocity = .zero
-        trackpadCameraAxis = nil
+        trackpadPendingCameraDelta = 0
+        trackpadLatestCameraVelocity = 0
+        trackpadCameraVelocity = 0
         if clearCameraY {
             trackpadCameraY = nil
         }
@@ -176,10 +150,6 @@ extension Scrollini {
     func seedTrackpadCamera(viewport: CGRect) {
         if trackpadCameraY == nil {
             trackpadCameraY = CGFloat(activeWorkspace) * viewport.height
-        }
-
-        if let workspace = activeWorkspaceObject(), workspace.scrollOffset == nil {
-            workspace.scrollOffset = horizontalCameraOffset(for: workspace, viewport: viewport)
         }
     }
 
@@ -220,7 +190,7 @@ extension Scrollini {
         }
 
         guard manualResizeElement == nil else {
-            trackpadPendingCameraDelta = .zero
+            trackpadPendingCameraDelta = 0
             stopTrackpadRenderLoop()
             return
         }
@@ -228,7 +198,7 @@ extension Scrollini {
         let viewport = currentViewport()
         seedTrackpadCamera(viewport: viewport)
         let delta = trackpadPendingCameraDelta
-        trackpadPendingCameraDelta = .zero
+        trackpadPendingCameraDelta = 0
         _ = applyTrackpadCameraDelta(delta, viewport: viewport)
         projectLayout(focusActiveWindow: false, layoutLockDelay: 0, snapshotTiming: .deferred)
     }
@@ -241,19 +211,10 @@ extension Scrollini {
 
         let viewport = currentViewport()
         let decay = exp(-trackpadNavigationDeceleration * elapsed)
-        trackpadCameraVelocity.x *= decay
-        trackpadCameraVelocity.y *= decay
+        trackpadCameraVelocity *= decay
 
-        let cameraDelta = CGSize(
-            width: trackpadCameraVelocity.x * elapsed,
-            height: trackpadCameraVelocity.y * elapsed
-        )
-        let clamped = applyTrackpadCameraDelta(cameraDelta, viewport: viewport)
-        if clamped.x {
-            trackpadCameraVelocity.x = 0
-        }
-        if clamped.y {
-            trackpadCameraVelocity.y = 0
+        if applyTrackpadCameraDelta(trackpadCameraVelocity * elapsed, viewport: viewport) {
+            trackpadCameraVelocity = 0
         }
 
         projectLayout(focusActiveWindow: false, layoutLockDelay: 0, snapshotTiming: .deferred)
@@ -268,38 +229,15 @@ extension Scrollini {
         cancelTimer(&trackpadMomentumTimer)
     }
 
+    /// Moves the camera vertically and reports whether the strip of workspaces ran out underneath
+    /// it, which is momentum's cue to stop rather than grind against the end.
     @discardableResult
-    func applyTrackpadCameraDelta(_ delta: CGSize, viewport: CGRect) -> (x: Bool, y: Bool) {
+    func applyTrackpadCameraDelta(_ delta: CGFloat, viewport: CGRect) -> Bool {
         let currentY = trackpadCameraY ?? CGFloat(activeWorkspace) * viewport.height
         let maxY = max(0, CGFloat(max(workspaces.count - 1, 0)) * viewport.height)
-        let nextY = min(max(currentY + delta.height, 0), maxY)
+        let nextY = min(max(currentY + delta, 0), maxY)
         trackpadCameraY = nextY
-
-        // A direction-locked vertical swipe carries no horizontal delta, and must not pin the
-        // scroll offset of every workspace the camera passes over on the way.
-        guard abs(delta.width) > 0.01 else {
-            return (false, abs(nextY - (currentY + delta.height)) > 0.5)
-        }
-
-        let workspaceIndex = trackpadCameraWorkspaceIndex(cameraY: nextY, viewport: viewport)
-        var clampedX = false
-        if workspaces.indices.contains(workspaceIndex) {
-            let workspace = workspaces[workspaceIndex]
-            if !workspace.columns.isEmpty {
-                let currentX = horizontalCameraOffset(for: workspace, viewport: viewport)
-                let maxX = maxHorizontalCameraOffset(for: workspace, viewport: viewport)
-                let nextX = min(max(currentX + delta.width, 0), maxX)
-                workspace.scrollOffset = nextX
-                clampedX = abs(nextX - (currentX + delta.width)) > 0.5
-            } else {
-                clampedX = abs(delta.width) > 0.5
-            }
-        } else {
-            clampedX = abs(delta.width) > 0.5
-        }
-
-        let clampedY = abs(nextY - (currentY + delta.height)) > 0.5
-        return (clampedX, clampedY)
+        return abs(nextY - (currentY + delta)) > 0.5
     }
 
     func settleTrackpadCamera(focusActiveWindow: Bool) {
@@ -312,34 +250,15 @@ extension Scrollini {
         seedTrackpadCamera(viewport: viewport)
         let previousState = captureLayoutState()
 
-        // Settle only the axis the swipe committed to. A vertical swipe lands on a workspace and
-        // leaves each workspace's column position exactly where it was; a horizontal swipe lands
-        // on a column without ever changing workspace.
-        let axis = trackpadCameraAxis ?? .horizontal
-        if axis == .vertical {
-            let targetWorkspace = trackpadCameraWorkspaceIndex(
-                cameraY: trackpadCameraY ?? CGFloat(activeWorkspace) * viewport.height,
-                viewport: viewport
-            )
-            setActiveWorkspace(targetWorkspace)
-        }
+        // The camera lands on the workspace nearest to where it stopped, and every workspace keeps
+        // the column position it already had.
+        let targetWorkspace = trackpadCameraWorkspaceIndex(
+            cameraY: trackpadCameraY ?? CGFloat(activeWorkspace) * viewport.height,
+            viewport: viewport
+        )
+        setActiveWorkspace(targetWorkspace)
 
-        if axis == .horizontal, let workspace = activeWorkspaceObject(), !workspace.columns.isEmpty {
-            let offset = horizontalCameraOffset(for: workspace, viewport: viewport)
-            switch trackpadNavigationSnap {
-            case .nearestColumn:
-                workspace.activeColumn = closestColumn(to: offset, in: workspace, viewport: viewport)
-                workspace.scrollOffset = nil
-            case .nearestVisible:
-                workspace.activeColumn = mostVisibleColumn(in: workspace, viewport: viewport, scrollOffset: offset)
-                workspace.scrollOffset = offset
-            case .none:
-                workspace.activeColumn = mostVisibleColumn(in: workspace, viewport: viewport, scrollOffset: offset)
-                workspace.scrollOffset = offset
-            }
-        }
-
-        resetTrackpadCameraMotion(clearCameraY: trackpadNavigationSnap != .none)
+        resetTrackpadCameraMotion(clearCameraY: true)
         hoverFocusRequiresRearm = true
         suppressHoverFocusAfterTrackpadMovement()
 
@@ -367,7 +286,7 @@ extension Scrollini {
             let viewport = currentViewport()
             seedTrackpadCamera(viewport: viewport)
             _ = applyTrackpadCameraDelta(trackpadPendingCameraDelta, viewport: viewport)
-            trackpadPendingCameraDelta = .zero
+            trackpadPendingCameraDelta = 0
         }
 
         resetTrackpadCameraMotion(clearCameraY: false)

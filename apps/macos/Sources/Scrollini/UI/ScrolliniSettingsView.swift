@@ -223,19 +223,9 @@ struct ScrolliniSettingsView: View {
         Section("Trackpad") {
             Toggle("Trackpad navigation", isOn: optionalBoolBinding(\.trackpadNavigation, fallback: true))
 
-            Stepper(value: optionalIntBinding(\.trackpadNavigationColumnFingers, fallback: 3), in: 2 ... 5) {
-                HStack {
-                    Text("Column fingers")
-                    Spacer()
-                    Text("\(store.config.trackpadNavigationColumnFingers ?? store.config.trackpadNavigationFingers ?? 3)")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-            }
-
             Stepper(value: optionalIntBinding(\.trackpadNavigationWorkspaceFingers, fallback: 4), in: 2 ... 5) {
                 HStack {
-                    Text("Workspace fingers")
+                    Text("Fingers")
                     Spacer()
                     Text("\(store.config.trackpadNavigationWorkspaceFingers ?? 4)")
                         .foregroundStyle(.secondary)
@@ -245,31 +235,20 @@ struct ScrolliniSettingsView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Sensitivity")
+                    Text("Workspaces per swipe")
                     Spacer()
-                    Text(String(format: "%.1fx", store.config.trackpadNavigationSensitivity ?? 1.6))
+                    Text(String(format: "%.1f", store.config.trackpadNavigationWorkspaceSensitivity ?? 6.4))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
                 Slider(
-                    value: optionalCGFloatBinding(\.trackpadNavigationSensitivity, fallback: 1.6),
-                    in: 0.1 ... 20,
+                    value: optionalCGFloatBinding(\.trackpadNavigationWorkspaceSensitivity, fallback: 6.4),
+                    in: 0.1 ... 40,
                     step: 0.1
                 )
             }
 
-            Picker(selection: optionalEnumBinding(\.trackpadNavigationSnap, fallback: .nearestColumn)) {
-                ForEach(TrackpadNavigationSnap.allCases, id: \.self) { value in
-                    Text(value.displayName).tag(value)
-                }
-            } label: {
-                Text("Snap")
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle("Invert horizontal", isOn: optionalBoolBinding(\.trackpadNavigationInvertX, fallback: false))
-                Toggle("Invert vertical", isOn: optionalBoolBinding(\.trackpadNavigationInvertY, fallback: false))
-            }
+            Toggle("Invert direction", isOn: optionalBoolBinding(\.trackpadNavigationInvertY, fallback: false))
         }
     }
 

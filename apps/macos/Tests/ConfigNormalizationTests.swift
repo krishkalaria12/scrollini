@@ -33,16 +33,10 @@ final class ConfigNormalizationTests: XCTestCase {
 
     func testFingerCountClamps() {
         var c = ScrolliniConfig.fallback
-        c.trackpadNavigationFingers = 99
-        XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationFingers, 5)
-        c.trackpadNavigationFingers = 1
-        XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationFingers, 2)
-
-        c.trackpadNavigationColumnFingers = 99
+        c.trackpadNavigationWorkspaceFingers = 99
+        XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationWorkspaceFingers, 5)
         c.trackpadNavigationWorkspaceFingers = 1
-        let normalized = ScrolliniConfig.normalize(c)
-        XCTAssertEqual(normalized.trackpadNavigationColumnFingers, 5)
-        XCTAssertEqual(normalized.trackpadNavigationWorkspaceFingers, 2)
+        XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationWorkspaceFingers, 2)
     }
 
     func testAnimationClamps() {
@@ -68,10 +62,10 @@ final class ConfigNormalizationTests: XCTestCase {
 
     func testTrackpadClamps() {
         var c = ScrolliniConfig.fallback
-        c.trackpadNavigationSensitivity = 999
-        XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationSensitivity, 20)
-        c.trackpadNavigationSensitivity = 0
-        XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationSensitivity, 0.1)
+        c.trackpadNavigationWorkspaceSensitivity = 999
+        XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationWorkspaceSensitivity, 40)
+        c.trackpadNavigationWorkspaceSensitivity = 0
+        XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationWorkspaceSensitivity, 0.1)
         c = ScrolliniConfig.fallback
         c.trackpadNavigationDirectionLockThreshold = 9
         XCTAssertEqual(ScrolliniConfig.normalize(c).trackpadNavigationDirectionLockThreshold, 0.5)

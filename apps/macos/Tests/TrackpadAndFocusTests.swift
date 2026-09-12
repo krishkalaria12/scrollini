@@ -7,46 +7,45 @@ final class TrackpadAndFocusTests: XCTestCase {
 
     func testTrackpadDeltaSigns() {
         let s = Scrollini()
-        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationSensitivity: 1.6, trackpadNavigationWorkspaceSensitivity: 6.4, trackpadNavigationVelocityGain: 1.35), sourceURL: nil, sourceModificationDate: nil)
-        let d = s.trackpadCameraDelta(from: CGPoint(x: 0.01, y: 0.02), velocity: .zero, viewport: testViewport)
-        XCTAssertLessThan(d.width, 0)
-        XCTAssertGreaterThan(d.height, 0)
+        s.loadedConfig = LoadedScrolliniConfig(config: ScrolliniConfig(trackpadNavigationWorkspaceSensitivity: 6.4, trackpadNavigationVelocityGain: 1.35), sourceURL: nil, sourceModificationDate: nil)
+        XCTAssertGreaterThan(s.trackpadCameraDelta(from: 0.02, velocity: 0, viewport: testViewport), 0)
+        XCTAssertLessThan(s.trackpadCameraDelta(from: -0.02, velocity: 0, viewport: testViewport), 0)
     }
 
     func testVelocityGainCaps() {
         let s = Scrollini()
-        let slow = s.trackpadCameraVelocityGain(for: CGPoint(x: 0.1, y: 0.1))
-        let fast = s.trackpadCameraVelocityGain(for: CGPoint(x: 2, y: 2))
+        let slow = s.trackpadCameraVelocityGain(for: 0.1)
+        let fast = s.trackpadCameraVelocityGain(for: 2)
         XCTAssertGreaterThanOrEqual(fast, slow)
         XCTAssertLessThanOrEqual(fast, 1 + s.trackpadNavigationVelocityGain)
+        XCTAssertEqual(s.trackpadCameraVelocityGain(for: -2), fast, accuracy: 0.001)
     }
 
     func testPendingAndMomentumThresholds() {
         let s = Scrollini()
         XCTAssertFalse(s.hasPendingTrackpadCameraDelta)
-        s.trackpadPendingCameraDelta = CGSize(width: 0.6, height: 0)
+        s.trackpadPendingCameraDelta = 0.6
         XCTAssertTrue(s.hasPendingTrackpadCameraDelta)
-        s.trackpadPendingCameraDelta = .zero
-        s.trackpadCameraVelocity = CGPoint(x: 10, y: 0)
+        s.trackpadPendingCameraDelta = 0
+        s.trackpadCameraVelocity = 10
         XCTAssertFalse(s.hasTrackpadMomentumVelocity)
-        s.trackpadCameraVelocity = CGPoint(x: 100, y: 0)
+        s.trackpadCameraVelocity = 100
         XCTAssertTrue(s.hasTrackpadMomentumVelocity)
     }
 
     func testStrongestVelocity() {
         let s = Scrollini()
-        s.trackpadLatestCameraVelocity = CGPoint(x: 50, y: 0)
-        XCTAssertEqual(s.strongestTrackpadCameraVelocity(endingVelocity: CGPoint(x: 30, y: 0)).x, 50, accuracy: 0.001)
-        XCTAssertEqual(s.strongestTrackpadCameraVelocity(endingVelocity: CGPoint(x: 60, y: 0)).x, 60, accuracy: 0.001)
+        s.trackpadLatestCameraVelocity = 50
+        XCTAssertEqual(s.strongestTrackpadCameraVelocity(endingVelocity: 30), 50, accuracy: 0.001)
+        XCTAssertEqual(s.strongestTrackpadCameraVelocity(endingVelocity: 60), 60, accuracy: 0.001)
     }
 
     func testApplyDeltaClamps() {
         let (s, _) = makeScrolliniWithModel()
         s.trackpadCameraY = nil
-        s.workspaces[0].scrollOffset = nil
         s.cachedViewport = testViewport; s.cachedViewportAt = CFAbsoluteTimeGetCurrent()
-        let clamped = s.applyTrackpadCameraDelta(CGSize(width: 10000, height: 10000), viewport: testViewport)
-        XCTAssertTrue(clamped.x || clamped.y)
+        XCTAssertTrue(s.applyTrackpadCameraDelta(10000, viewport: testViewport))
+        XCTAssertFalse(s.applyTrackpadCameraDelta(-testViewport.height, viewport: testViewport))
     }
 
     func testFocusExpectations() {

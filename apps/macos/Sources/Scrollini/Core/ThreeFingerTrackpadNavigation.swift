@@ -92,24 +92,21 @@ private final class MultitouchSupport {
 }
 
 /// Reads raw contact frames rather than AppKit gesture events. The system owns most multi-finger
-/// gestures, so keeping the contact count here lets Scrollini reserve three fingers for columns
-/// and four for workspaces without asking a horizontal swipe to compete with a vertical one.
+/// gestures, so matching the contact count here lets Scrollini claim a four-finger swipe for
+/// workspaces while two- and three-finger scrolling still belongs to the app under the cursor.
 final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
     private struct GestureState {
         var active = false
-        var fingers = 0
         var lastCentroid = CGPoint.zero
         var lastTimestamp: CFAbsoluteTime = 0
-        var velocity = CGPoint.zero
+        var velocity: CGFloat = 0
         /// Travel since the gesture started, held until the movement is deliberate.
         var cumulative = CGPoint.zero
-        /// `nil` until the swipe has moved far enough to commit to its contact-count axis.
-        var axis: TrackpadNavigationAxis?
+        /// False until the swipe has travelled far enough to move the camera.
+        var moved = false
     }
 
-    private let columnFingers: Int
-    private let workspaceFingers: Int
-    private let invertX: Bool
+    private let fingers: Int
     private let invertY: Bool
     private let directionLockThreshold: CGFloat
     private let onEvent: (TrackpadNavigationEvent) -> Void
@@ -122,16 +119,12 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
     nonisolated(unsafe) private static weak var active: ThreeFingerTrackpadNavigation?
 
     init(
-        columnFingers: Int,
-        workspaceFingers: Int,
-        invertX: Bool,
+        fingers: Int,
         invertY: Bool,
         directionLockThreshold: CGFloat,
         onEvent: @escaping (TrackpadNavigationEvent) -> Void
     ) {
-        self.columnFingers = columnFingers
-        self.workspaceFingers = workspaceFingers
-        self.invertX = invertX
+        self.fingers = fingers
         self.invertY = invertY
         self.directionLockThreshold = max(directionLockThreshold, 0.0001)
         self.onEvent = onEvent
@@ -205,26 +198,12 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         let event: TrackpadNavigationEvent?
 
         lock.lock()
-        guard let allowedAxes = axes(forFingerCount: count), touches != nil else {
-            event = endGesture()
-            lock.unlock()
-            if let event {
-                onEvent(event)
-            }
-            return
-        }
-
-        if state.active, state.fingers != count {
-            // A finger joining or leaving ends the prior gesture. The next raw frame starts a
-            // fresh one, which prevents a three-finger strip scroll from turning into a workspace
-            // switch midway through the same touch.
+        // A finger joining or leaving ends the gesture rather than retargeting it, so a swipe that
+        // passes through the right contact count on its way to another one does not move anything.
+        if count != fingers || touches == nil {
             event = endGesture()
         } else {
-            event = updateGesture(
-                touches: touches!.assumingMemoryBound(to: MTTouch.self),
-                count: count,
-                allowedAxes: allowedAxes
-            )
+            event = updateGesture(touches: touches!.assumingMemoryBound(to: MTTouch.self), count: count)
         }
         lock.unlock()
 
@@ -233,40 +212,21 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         }
     }
 
-    private func axes(forFingerCount count: Int) -> [TrackpadNavigationAxis]? {
-        var axes: [TrackpadNavigationAxis] = []
-        if count == columnFingers {
-            axes.append(.horizontal)
-        }
-        if count == workspaceFingers {
-            axes.append(.vertical)
-        }
-        return axes.isEmpty ? nil : axes
-    }
-
-    private func updateGesture(
-        touches: UnsafeMutablePointer<MTTouch>,
-        count: Int,
-        allowedAxes: [TrackpadNavigationAxis]
-    ) -> TrackpadNavigationEvent? {
+    private func updateGesture(touches: UnsafeMutablePointer<MTTouch>, count: Int) -> TrackpadNavigationEvent? {
         let centroid = centroid(of: touches, count: count)
         let now = CFAbsoluteTimeGetCurrent()
         guard state.active else {
             state.active = true
-            state.fingers = count
             state.lastCentroid = centroid
             state.lastTimestamp = now
-            state.velocity = .zero
+            state.velocity = 0
             state.cumulative = .zero
-            state.axis = nil
+            state.moved = false
             return .began
         }
 
-        var deltaX = centroid.x - state.lastCentroid.x
+        let deltaX = centroid.x - state.lastCentroid.x
         var deltaY = centroid.y - state.lastCentroid.y
-        if invertX {
-            deltaX *= -1
-        }
         if invertY {
             deltaY *= -1
         }
@@ -282,44 +242,21 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
         state.cumulative.y += deltaY
 
         // Hold everything back until the swipe has travelled far enough to read as deliberate,
-        // then release the travel banked so far. The number of contacts has already chosen the
-        // axis, which makes a three-finger column swipe and four-finger workspace swipe reliable
-        // even when the gesture is not perfectly straight.
-        let axis: TrackpadNavigationAxis
-        if let lockedAxis = state.axis {
-            axis = lockedAxis
-        } else {
-            let travel = state.cumulative
-            guard hypot(travel.x, travel.y) >= directionLockThreshold else {
+        // then release the travel banked so far. The contact count has already claimed the
+        // gesture, so only the vertical half of that travel matters and a swipe that wanders
+        // sideways still lands on a workspace.
+        if !state.moved {
+            guard hypot(state.cumulative.x, state.cumulative.y) >= directionLockThreshold else {
                 return nil
             }
 
-            axis = allowedAxes.count == 1 || abs(travel.x) > abs(travel.y)
-                ? allowedAxes[0]
-                : allowedAxes[1]
-            state.axis = axis
-            deltaX = travel.x
-            deltaY = travel.y
+            state.moved = true
+            deltaY = state.cumulative.y
         }
 
-        let instantVelocity = CGPoint(x: deltaX / elapsed, y: deltaY / elapsed)
-        state.velocity = CGPoint(
-            x: state.velocity.x * 0.65 + instantVelocity.x * 0.35,
-            y: state.velocity.y * 0.65 + instantVelocity.y * 0.35
-        )
-
-        let delta: CGPoint
-        let velocity: CGPoint
-        switch axis {
-        case .horizontal:
-            delta = CGPoint(x: deltaX, y: 0)
-            velocity = CGPoint(x: state.velocity.x, y: 0)
-        case .vertical:
-            delta = CGPoint(x: 0, y: deltaY)
-            velocity = CGPoint(x: 0, y: state.velocity.y)
-        }
-
-        return .changed(axis: axis, delta: delta, velocity: velocity)
+        let instantVelocity = deltaY / elapsed
+        state.velocity = state.velocity * 0.65 + instantVelocity * 0.35
+        return .changed(delta: deltaY, velocity: state.velocity)
     }
 
     private func centroid(of touches: UnsafeMutablePointer<MTTouch>, count: Int) -> CGPoint {
@@ -340,29 +277,20 @@ final class ThreeFingerTrackpadNavigation: @unchecked Sendable {
             return nil
         }
 
-        let axis = state.axis
-        let velocity: CGPoint
-        switch axis {
-        case .horizontal:
-            velocity = CGPoint(x: state.velocity.x, y: 0)
-        case .vertical:
-            velocity = CGPoint(x: 0, y: state.velocity.y)
-        case nil:
-            // Never committed to an axis, so there is no motion to carry into momentum.
-            velocity = .zero
-        }
+        // A swipe that never passed the threshold has no motion to carry into momentum.
+        let moved = state.moved
+        let velocity = moved ? state.velocity : 0
 
         resetGesture()
-        return .ended(axis: axis, velocity: velocity)
+        return .ended(moved: moved, velocity: velocity)
     }
 
     private func resetGesture() {
         state.active = false
-        state.fingers = 0
         state.lastCentroid = .zero
         state.lastTimestamp = 0
-        state.velocity = .zero
+        state.velocity = 0
         state.cumulative = .zero
-        state.axis = nil
+        state.moved = false
     }
 }

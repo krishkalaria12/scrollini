@@ -90,8 +90,10 @@ Niri commit inspected: `dd75865`
   is down for it. Everything else — an app clamping to a minimum size, a
   terminal snapping to a character cell — is recorded as a measurement and does
   not rewrite the column's configured width.
-- Three-finger swipes take Niri's direction lock, including its asymmetric
-  vertical sensitivity.
+- Workspace swipes take Niri's vertical sensitivity and its travel threshold, but
+  not its horizontal half. scrollini matches the contact count instead of an axis:
+  four fingers move workspaces, columns move by keybinding, and two- and
+  three-finger scrolling is left to the app under the cursor.
 - The current workspace and column projects to the visible macOS frame.
 - Other windows remain physically parked just past a side edge so Cmd-Tab can
   still find them and macOS does not relocate fully offscreen windows.

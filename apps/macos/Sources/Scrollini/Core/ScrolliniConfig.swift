@@ -36,12 +36,6 @@ enum HoverFocusMode: String, Codable {
     case edgeOrVisible = "edge_or_visible"
 }
 
-enum TrackpadNavigationSnap: String, Codable {
-    case nearestColumn = "nearest_column"
-    case nearestVisible = "nearest_visible"
-    case none
-}
-
 struct LoadedScrolliniConfig {
     var config: ScrolliniConfig
     var sourceURL: URL?
@@ -81,13 +75,8 @@ struct ScrolliniConfig: Codable {
     var excludedKeybindings: [String]?
     var keybindings: [String: [String]]?
     var trackpadNavigation: Bool?
-    /// Number of fingers used to scroll the horizontal column strip. When omitted, the legacy
-    /// `trackpad_navigation_fingers` value is used so existing configs keep their behavior.
-    var trackpadNavigationColumnFingers: Int?
     /// Number of fingers used to move between virtual workspaces.
     var trackpadNavigationWorkspaceFingers: Int?
-    var trackpadNavigationFingers: Int?
-    var trackpadNavigationSensitivity: CGFloat?
     var trackpadNavigationWorkspaceSensitivity: CGFloat?
     var trackpadNavigationDirectionLockThreshold: CGFloat?
     var trackpadNavigationDeceleration: CGFloat?
@@ -95,8 +84,6 @@ struct ScrolliniConfig: Codable {
     var trackpadNavigationMomentumMinVelocity: CGFloat?
     var trackpadNavigationVelocityGain: CGFloat?
     var trackpadNavigationSettleAnimationMS: Int?
-    var trackpadNavigationSnap: TrackpadNavigationSnap?
-    var trackpadNavigationInvertX: Bool?
     var trackpadNavigationInvertY: Bool?
     var rescanIntervalMS: Int?
     var restoreOnExit: Bool?
@@ -133,10 +120,7 @@ struct ScrolliniConfig: Codable {
         excludedKeybindings: [],
         keybindings: defaultKeybindings,
         trackpadNavigation: true,
-        trackpadNavigationColumnFingers: 3,
         trackpadNavigationWorkspaceFingers: 4,
-        trackpadNavigationFingers: 3,
-        trackpadNavigationSensitivity: 1.6,
         trackpadNavigationWorkspaceSensitivity: 6.4,
         trackpadNavigationDirectionLockThreshold: 0.02,
         trackpadNavigationDeceleration: 5.5,
@@ -144,8 +128,6 @@ struct ScrolliniConfig: Codable {
         trackpadNavigationMomentumMinVelocity: 80,
         trackpadNavigationVelocityGain: 1.35,
         trackpadNavigationSettleAnimationMS: 240,
-        trackpadNavigationSnap: .nearestColumn,
-        trackpadNavigationInvertX: false,
         trackpadNavigationInvertY: false,
         rescanIntervalMS: 1000,
         restoreOnExit: true,
@@ -286,10 +268,7 @@ struct ScrolliniConfig: Codable {
         config.innerGap = config.innerGap.map { min(max($0, 0), 96) }
         config.outerGap = config.outerGap.map { min(max($0, 0), 96) }
         config.parkedSliverWidth = config.parkedSliverWidth.map { min(max($0, 0), 32) }
-        config.trackpadNavigationColumnFingers = config.trackpadNavigationColumnFingers.map { min(max($0, 2), 5) }
         config.trackpadNavigationWorkspaceFingers = config.trackpadNavigationWorkspaceFingers.map { min(max($0, 2), 5) }
-        config.trackpadNavigationFingers = config.trackpadNavigationFingers.map { min(max($0, 2), 5) }
-        config.trackpadNavigationSensitivity = config.trackpadNavigationSensitivity.map { min(max($0, 0.1), 20) }
         config.trackpadNavigationWorkspaceSensitivity = config.trackpadNavigationWorkspaceSensitivity
             .map { min(max($0, 0.1), 40) }
         config.trackpadNavigationDirectionLockThreshold = config.trackpadNavigationDirectionLockThreshold
@@ -378,10 +357,7 @@ struct ScrolliniConfig: Codable {
         case excludedKeybindings = "excluded_keybindings"
         case keybindings
         case trackpadNavigation = "trackpad_navigation"
-        case trackpadNavigationColumnFingers = "trackpad_navigation_column_fingers"
         case trackpadNavigationWorkspaceFingers = "trackpad_navigation_workspace_fingers"
-        case trackpadNavigationFingers = "trackpad_navigation_fingers"
-        case trackpadNavigationSensitivity = "trackpad_navigation_sensitivity"
         case trackpadNavigationWorkspaceSensitivity = "trackpad_navigation_workspace_sensitivity"
         case trackpadNavigationDirectionLockThreshold = "trackpad_navigation_direction_lock_threshold"
         case trackpadNavigationDeceleration = "trackpad_navigation_deceleration"
@@ -389,8 +365,6 @@ struct ScrolliniConfig: Codable {
         case trackpadNavigationMomentumMinVelocity = "trackpad_navigation_momentum_min_velocity"
         case trackpadNavigationVelocityGain = "trackpad_navigation_velocity_gain"
         case trackpadNavigationSettleAnimationMS = "trackpad_navigation_settle_animation_ms"
-        case trackpadNavigationSnap = "trackpad_navigation_snap"
-        case trackpadNavigationInvertX = "trackpad_navigation_invert_x"
         case trackpadNavigationInvertY = "trackpad_navigation_invert_y"
         case rescanIntervalMS = "rescan_interval_ms"
         case restoreOnExit = "restore_on_exit"

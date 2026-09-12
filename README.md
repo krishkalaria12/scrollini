@@ -87,7 +87,6 @@ terminal app itself to get those permissions.
 | `Ctrl+Opt+-` / `Ctrl+Opt+=` | Nudge the active column narrower / wider |
 | `Ctrl+Opt+F` | Maximize the active column, or restore its previous width |
 | `Ctrl+Opt+Shift+R` | Reset the active column to its configured width |
-| three-finger swipe left / right | Scroll through columns |
 | four-finger swipe up / down | Switch workspace |
 
 `Ctrl+Opt` focuses. `Ctrl+Opt+Shift` moves whatever `Ctrl+Opt` focuses. One modifier
@@ -104,17 +103,18 @@ Five commands ship unbound and are yours to assign: `cycle_width_preset_backward
 both ends, so the backward binding is a convenience rather than a necessity.
 
 Trackpad navigation uses Apple's private MultitouchSupport framework so Scrollini can
-see raw contact movement without stealing normal two-finger scrolling. Three fingers
-move through the horizontal column strip. Four fingers move between virtual
-workspaces. It moves a continuous camera with momentum, then focuses the workspace
-and column nearest the camera when the motion settles.
+see raw contact movement without stealing normal two-finger scrolling. Four fingers
+move between virtual workspaces, and nothing else is claimed: columns move by
+keybinding, so two- and three-finger scrolling still belongs to the app under the
+cursor. The swipe moves a continuous camera with momentum, then focuses the
+workspace nearest the camera when the motion settles.
 
 Scrollini waits until the fingers have travelled
-`trackpad_navigation_direction_lock_threshold` of the trackpad before moving.
-The contact count picks the direction, so a three-finger swipe only moves columns
-and a four-finger swipe only moves workspaces. Vertical movement is more sensitive
-than horizontal by default, matching Niri's ratio of one workspace per quarter of
-the travel it takes to scroll one screen width.
+`trackpad_navigation_direction_lock_threshold` of the trackpad before moving, which
+keeps a resting hand from nudging the camera. Only vertical travel counts after
+that, so a swipe that wanders sideways still lands on a workspace. The 6.4
+workspaces per swipe default is Niri's ratio, one workspace per quarter of the
+travel Niri needs to scroll a screen width.
 
 ## Config
 
@@ -181,9 +181,7 @@ The repo includes a full default config. A compact version looks like this:
     "cycle_width_preset_backward": ["ctrl+alt+shift+f"]
   },
   "trackpad_navigation": true,
-  "trackpad_navigation_column_fingers": 3,
   "trackpad_navigation_workspace_fingers": 4,
-  "trackpad_navigation_sensitivity": 1.6,
   "trackpad_navigation_workspace_sensitivity": 6.4,
   "trackpad_navigation_direction_lock_threshold": 0.02,
   "trackpad_navigation_deceleration": 5.5,
@@ -191,8 +189,6 @@ The repo includes a full default config. A compact version looks like this:
   "trackpad_navigation_momentum_min_velocity": 80,
   "trackpad_navigation_velocity_gain": 1.35,
   "trackpad_navigation_settle_animation_ms": 240,
-  "trackpad_navigation_snap": "nearest_column",
-  "trackpad_navigation_invert_x": false,
   "trackpad_navigation_invert_y": false,
   "rescan_interval_ms": 1000,
   "restore_on_exit": true,
@@ -235,8 +231,8 @@ and logs a warning. Every matching rule contributes, so ordering does not matter
 
 When a shortcut is fighting an app and you want it back right now, the menu bar has
 **Pause Keybindings**. Pausing stops scrollini claiming keystrokes and nothing else:
-the strip keeps its layout, the trackpad keeps scrolling columns, and windows stay
-where they are.
+the strip keeps its layout, four-finger swipes keep switching workspace, and
+windows stay where they are.
 
 See `scrollini.config.json` for the full command-name list.
 
@@ -256,22 +252,17 @@ Useful string settings:
 - `focus_alignment`: `left`, `center`, or `smart`
 - `new_window_position` and rule `open_position`: `before_active`,
   `after_active`, or `end`
-- `trackpad_navigation_snap`: `nearest_column`, `nearest_visible`, or `none`
 - `hide_method`: `skylight_alpha` or `park_only`
 
 Useful trackpad numbers:
 
-- `trackpad_navigation_column_fingers`: contact count for horizontal column
-  navigation. Defaults to `3`.
-- `trackpad_navigation_workspace_fingers`: contact count for vertical workspace
+- `trackpad_navigation_workspace_fingers`: contact count for workspace
   navigation. Defaults to `4`.
-- `trackpad_navigation_sensitivity`: screen widths of column scrolling per full
-  swipe across the trackpad
-- `trackpad_navigation_workspace_sensitivity`: workspaces per full swipe. Unset,
-  it follows `trackpad_navigation_sensitivity * 4`, which is Niri's ratio
+- `trackpad_navigation_workspace_sensitivity`: workspaces per full swipe up or
+  down the trackpad, 6.4 by default
 - `trackpad_navigation_direction_lock_threshold`: fraction of the trackpad a
-  swipe must cross before it commits to an axis. Raise it if swipes pick the
-  wrong direction, lower it if they feel slow to catch on
+  swipe must cross before the camera moves at all. Raise it if a resting hand
+  moves workspaces, lower it if swipes feel slow to catch on
 
 Rules can match on `bundle_id`, `app_name`, or `title_contains`. Use
 `behavior: "ignore"` for windows scrollini should leave alone, `behavior: "float"`

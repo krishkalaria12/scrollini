@@ -14,9 +14,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
 
     struct TrackpadNavigationSettings: Equatable {
         var enabled: Bool
-        var columnFingers: Int
         var workspaceFingers: Int
-        var invertX: Bool
         var invertY: Bool
         var directionLockThreshold: CGFloat
     }
@@ -103,11 +101,9 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var transientWindowStateCheckedAt: CFAbsoluteTime = 0
     var trackpadNavigation: ThreeFingerTrackpadNavigation?
     var trackpadCameraY: CGFloat?
-    /// Axis the in-flight trackpad swipe committed to, so the settle only lands that axis.
-    var trackpadCameraAxis: TrackpadNavigationAxis?
-    var trackpadCameraVelocity = CGPoint.zero
-    var trackpadPendingCameraDelta = CGSize.zero
-    var trackpadLatestCameraVelocity = CGPoint.zero
+    var trackpadCameraVelocity: CGFloat = 0
+    var trackpadPendingCameraDelta: CGFloat = 0
+    var trackpadLatestCameraVelocity: CGFloat = 0
     var trackpadRenderTimer: DispatchSourceTimer?
     var trackpadMomentumTimer: DispatchSourceTimer?
     var trackpadMomentumLastFrameAt: CFAbsoluteTime = 0
@@ -173,7 +169,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         }
         if trackpadNavigationEnabled {
             if trackpadNavigation != nil {
-                print("scrollini: \(trackpadNavigationColumnFingers)-finger swipe scrolls columns; \(trackpadNavigationWorkspaceFingers)-finger swipe changes workspaces")
+                print("scrollini: \(trackpadNavigationWorkspaceFingers)-finger swipe up/down changes workspaces")
             } else {
                 print("scrollini: trackpad navigation unavailable; private MultitouchSupport backend did not start")
             }

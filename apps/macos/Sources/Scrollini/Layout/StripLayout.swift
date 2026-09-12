@@ -128,55 +128,6 @@ extension Scrollini {
         return max(0, contentWidth - viewport.width, lastColumnOffset)
     }
 
-    func closestColumn(to scrollOffset: CGFloat, in workspace: Workspace, viewport: CGRect) -> Int {
-        guard !workspace.columns.isEmpty else {
-            return 0
-        }
-
-        let metrics = stripMetrics(for: workspace, viewport: viewport)
-        let cameraCenter = scrollOffset + viewport.width / 2
-        var closestIndex = 0
-        var closestDistance = CGFloat.greatestFiniteMagnitude
-        for index in workspace.columns.indices {
-            guard metrics.origins.indices.contains(index), metrics.widths.indices.contains(index) else {
-                continue
-            }
-
-            let columnCenter = metrics.origins[index] + metrics.widths[index] / 2
-            let distance = abs(columnCenter - cameraCenter)
-            if distance < closestDistance {
-                closestDistance = distance
-                closestIndex = index
-            }
-        }
-
-        return closestIndex
-    }
-
-    func mostVisibleColumn(in workspace: Workspace, viewport: CGRect, scrollOffset: CGFloat) -> Int {
-        guard !workspace.columns.isEmpty else {
-            return 0
-        }
-
-        let frames = stripFrames(
-            for: workspace,
-            viewport: viewport,
-            activeColumn: workspace.activeColumn,
-            scrollOffset: scrollOffset
-        )
-        var bestIndex = closestColumn(to: scrollOffset, in: workspace, viewport: viewport)
-        var bestVisibleWidth: CGFloat = 0
-        for index in frames.indices {
-            let visibleFrame = visualFrame(frames[index], viewport: viewport).intersection(viewport)
-            let visibleWidth = visibleFrame.isNull ? 0 : visibleFrame.width
-            if visibleWidth > bestVisibleWidth {
-                bestVisibleWidth = visibleWidth
-                bestIndex = index
-            }
-        }
-        return bestIndex
-    }
-
     func defaultScrollOffset(
         metrics: (origins: [CGFloat], widths: [CGFloat]),
         activeColumn: Int,
