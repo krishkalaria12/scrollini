@@ -85,6 +85,17 @@ final class LayoutProjectionTests: XCTestCase {
         XCTAssertFalse(s.framesApproximatelyEqual(CGRect(x: 0,y: 0,width: 100,height: 100), CGRect(x: 1,y: 0,width: 100,height: 100), tolerance: 0.5))
         XCTAssertTrue(s.framesApproximatelyEqual(CGRect(x: 0,y: 0,width: 100,height: 100), CGRect(x: 0.4,y: 0.4,width: 100.3,height: 100.3), tolerance: 1))
     }
+
+    func testHorizontalViewportInsetPreservesWorkingHeight() {
+        let scrollini = Scrollini()
+        let viewport = CGRect(x: 0, y: 25, width: 1600, height: 1000)
+        let inset = scrollini.insetViewportHorizontally(viewport, by: 12)
+
+        XCTAssertEqual(inset.minX, 12, accuracy: 0.001)
+        XCTAssertEqual(inset.width, 1576, accuracy: 0.001)
+        XCTAssertEqual(inset.minY, viewport.minY, accuracy: 0.001)
+        XCTAssertEqual(inset.height, viewport.height, accuracy: 0.001)
+    }
 }
 
 #endif

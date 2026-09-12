@@ -150,6 +150,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var appliedFrames: [ObjectIdentifier: CGRect] = [:]
     var appliedAlphas: [UInt32: Float] = [:]
     var appliedWindowLevels: [UInt32: Int32] = [:]
+    var lastRaisedVisibleWindowOrder: [ObjectIdentifier] = []
     var snapshotWriteTimer: DispatchSourceTimer?
     var pendingSnapshotViewport: CGRect?
     var lastPersistentLayoutSnapshotData: Data?

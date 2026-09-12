@@ -756,6 +756,8 @@ enum SelfCheck {
         let frames = s.stripFrames(for: ws, viewport: viewport, activeColumn: active, scrollOffset: 0)
         check("stripFrames count matches columns", frames.count == ws.columns.count)
         check("stripFrames first at viewport+gap", approx(frames[0].minX, viewport.minX + 12))
+        check("stripFrames use the viewport top", approx(frames[0].minY, viewport.minY))
+        check("stripFrames fill the viewport height", approx(frames[0].height, viewport.height))
 
         // horizontalCameraOffset respects scrollOffset when set
         ws.scrollOffset = 100
@@ -791,15 +793,31 @@ enum SelfCheck {
 
     private static func checkParkedFrames() {
         let s = Scrollini()
+        s.loadedConfig = LoadedScrolliniConfig(
+            config: ScrolliniConfig(outerGap: 12, parkedSliverWidth: 1),
+            sourceURL: nil,
+            sourceModificationDate: nil
+        )
         let w = window(400)
         w.manualWidthRatio = 0.8
         let before = s.parkedFrame(for: w, viewport: viewport, beforeActive: true)
         let after = s.parkedFrame(for: w, viewport: viewport, beforeActive: false)
         let sliver = s.parkedSliverWidth
-        check("parked before sits left of viewport", approx(before.minX, viewport.minX - before.width + sliver))
-        check("parked after sits right of viewport", approx(after.minX, viewport.maxX - sliver))
-        check("parked height respects innerGap", approx(before.height, viewport.height - s.innerGap * 2))
+        check("parked before sits at display edge", approx(before.maxX, viewport.minX - s.outerGap + sliver))
+        check("parked after sits at display edge", approx(after.minX, viewport.maxX + s.outerGap - sliver))
+        check("parked height fills viewport", approx(before.height, viewport.height))
         check("parked width matches layoutWidth", approx(before.width, s.layoutWidth(for: w, viewport: viewport)))
+
+        let insetViewport = CGRect(x: 12, y: viewport.minY, width: viewport.width - 24, height: viewport.height)
+        let workspace = Workspace()
+        workspace.columns = (0..<5).map(window)
+        workspace.activeColumn = 3
+        s.workspaces = [workspace]
+        let items = s.layoutItems(viewport: insetViewport, state: s.captureLayoutState(), parkHidden: true)
+        check("oldest left column is parked", !items[0].visible && approx(items[0].frame.maxX, 1))
+        check("second left column is parked", !items[1].visible && approx(items[1].frame.maxX, 1))
+        check("nearest left column remains visible", items[2].visible)
+        check("visible neighbors retain one gap", approx(items[3].frame.minX - items[2].frame.maxX, s.innerGap))
     }
 
     private static func checkCameraMath() {
@@ -821,6 +839,8 @@ enum SelfCheck {
         let hugeInset = s.insetViewport(viewport, by: 9999)
         check("insetViewport caps at 1/3 width", hugeInset.width > 0)
         check("insetViewport zero returns same", s.insetViewport(viewport, by: 0) == viewport)
+        let horizontalInset = s.insetViewportHorizontally(viewport, by: 20)
+        check("horizontal inset preserves height", approx(horizontalInset.height, viewport.height) && approx(horizontalInset.minY, viewport.minY))
     }
 
     private static func checkLayoutVisibility() {
