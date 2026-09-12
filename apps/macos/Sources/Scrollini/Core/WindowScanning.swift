@@ -25,17 +25,14 @@ extension Scrollini {
             return
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            guard let self,
-                  !reconcileExpectedFocusChange(pid: app.processIdentifier),
-                  !shouldSuppressFocusedWindowAdoption
-            else {
-                return
-            }
-            rescanWindows(adoptFocused: false)
-            adoptFocusedWindow(pid: app.processIdentifier, respectFocusSuppression: true)
+        if adoptFocusedWindow(pid: app.processIdentifier, respectFocusSuppression: true) {
+            return
         }
-        adoptFocusedWindow(pid: app.processIdentifier, respectFocusSuppression: true)
+
+        // Newly launched applications can activate before their first window reaches the model.
+        // Defer discovery for that uncommon case instead of rescanning every application after
+        // each ordinary Cmd-Tab activation.
+        scheduleRescan(after: 0.08, adoptFocused: true)
     }
 
     @objc func applicationLaunched(_ notification: Notification) {
@@ -124,24 +121,22 @@ extension Scrollini {
     /// not anything had happened. The fingerprint decides. A full sweep still runs on a slower
     /// cadence so that what the fingerprint cannot see, a retitled window above all, does not go
     /// stale indefinitely.
-    func rescanWindowsIfChanged(adoptFocused: Bool) {
+    func rescanWindowsIfChanged(adoptFocused: Bool, allowPeriodicFullSweep: Bool = true) {
         let signature = windowServerSignature()
         let now = CFAbsoluteTimeGetCurrent()
 
         if !adoptFocused,
            !signature.isEmpty,
            signature == lastWindowServerSignature,
-           now - lastFullRescanAt < fullRescanInterval
+           (!allowPeriodicFullSweep || now - lastFullRescanAt < fullRescanInterval)
         {
             return
         }
 
-        lastWindowServerSignature = signature
-        lastFullRescanAt = now
-        rescanWindows(adoptFocused: adoptFocused)
+        rescanWindows(adoptFocused: adoptFocused, knownWindowServerSignature: signature)
     }
 
-    func rescanWindows(adoptFocused: Bool) {
+    func rescanWindows(adoptFocused: Bool, knownWindowServerSignature: [UInt64]? = nil) {
         guard !transientSystemWindowIsActive() else {
             cancelHoverFocus()
             clearTrackpadCamera()
@@ -149,6 +144,8 @@ extension Scrollini {
         }
 
         let discovered = discoverWindows()
+        lastWindowServerSignature = knownWindowServerSignature ?? windowServerSignature()
+        lastFullRescanAt = CFAbsoluteTimeGetCurrent()
         var knownWindows = allWindows()
         var changed = false
 
