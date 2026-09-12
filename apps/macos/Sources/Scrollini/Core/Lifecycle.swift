@@ -57,7 +57,7 @@ extension Scrollini {
             clearTrackpadCamera()
             return
         }
-        rescanWindows(adoptFocused: wasTransient)
+        rescanWindowsIfChanged(adoptFocused: wasTransient)
     }
     func requestAccessibilityPermission() -> Bool {
         let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
@@ -117,6 +117,7 @@ extension Scrollini {
             refreshFrontmostApplication()
             return
         }
+        frontmostApplication = app
         frontmostAppBundleID = app.bundleIdentifier
         frontmostAppName = app.localizedName
     }

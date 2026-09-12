@@ -61,11 +61,25 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var commandByKeybinding: [String: Command] = [:]
     var excludedKeybindingSet = Set<String>()
     var appKeybindingExclusions: [AppKeybindingExclusion] = []
+    /// Bumped whenever the rules change, which retires every per-window answer cached against
+    /// them. Starts at 1 so a window's zero-valued default revision can never be mistaken for a
+    /// live one.
+    var windowRuleRevision: UInt64 = 1
     /// Frontmost app identity, cached from workspace activation notifications. Reading
     /// `NSWorkspace.shared.frontmostApplication` on the event tap thread for every key down would
     /// put a cross-process lookup in the hot path.
     var frontmostAppBundleID: String?
     var frontmostAppName: String?
+    var frontmostApplication: NSRunningApplication?
+    /// `NSWorkspace.shared.runningApplications` builds a fresh array of proxy objects on every
+    /// access, and three hot paths ask for it: window discovery, the transient-dialog check
+    /// behind every keystroke, and the open/save panel lookup inside that check. Launches and
+    /// terminations both arrive as notifications, so the snapshot is refreshed from those rather
+    /// than rebuilt per call. The age check is a backstop for whatever the notifications miss,
+    /// not the primary mechanism.
+    var cachedRunningApplications: [NSRunningApplication] = []
+    var cachedRunningApplicationsAt: CFAbsoluteTime = 0
+    let runningApplicationsCacheDuration: CFAbsoluteTime = 2
     var keybindingsPaused = false
     var scheduledRescanTimer: DispatchSourceTimer?
     var scheduledRescanAdoptFocused = false
@@ -79,6 +93,17 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var lastColumnNavigationAt: CFAbsoluteTime = 0
     var lastColumnNavigationDirection = 0
     var rescanTimer: Timer?
+    /// What the window server reported the last time the periodic tick looked, and when a real
+    /// accessibility sweep last ran. Together these let the tick skip the sweep when nothing has
+    /// opened, closed, or been minimized.
+    var lastWindowServerSignature: [UInt64] = []
+    var lastFullRescanAt: CFAbsoluteTime = 0
+    /// How long the tick may go on the window server's word alone. A window that is renamed while
+    /// nothing else happens is invisible to the fingerprint, and window rules can match on title,
+    /// so a real sweep still has to come round.
+    let fullRescanInterval: CFAbsoluteTime = 5
+    /// Elements that failed the manageability test on a check that can never change its mind.
+    var unmanageableWindows: Set<AXElementKey> = []
     var isApplyingLayout = false
     var layoutLockGeneration: UInt64 = 0
     var animationTimer: DispatchSourceTimer?
@@ -94,6 +119,7 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var hoverFocusTarget: ObjectIdentifier?
     var hoverFocusRequiresRearm = false
     var hoverFocusSuppressedUntil: CFAbsoluteTime = 0
+    var lastHoverFocusPoint = CGPoint(x: CGFloat.infinity, y: CGFloat.infinity)
     var transientWindowActive = false
     var transientWindowStateCheckedAt: CFAbsoluteTime = 0
     var trackpadNavigation: ThreeFingerTrackpadNavigation?
@@ -123,6 +149,10 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
     var lastPersistentLayoutSnapshotData: Data?
     var lastRestoreSnapshotData: Data?
     var floatingRaiseGeneration: UInt64 = 0
+    var lastFloatingRaiseAt: CFAbsoluteTime = 0
+    /// Long enough that a scroll does not raise on every frame, short enough that a floating
+    /// window a tiled one just slid under comes back to the front within a frame or two.
+    let floatingRaiseInterval: CFAbsoluteTime = 0.1
     lazy var persistentLayoutSnapshot = readPersistentLayoutSnapshot()
     var needsPersistentLayoutRestore = true
     var needsPersistentFocusRestore = true
@@ -180,10 +210,14 @@ final class Scrollini: NSObject, NSMenuDelegate, @unchecked Sendable {
         runMainLoop()
     }
 
-    func debugLog(_ message: String) {
+    /// The message is an autoclosure so a disabled log costs one boolean read. Several call
+    /// sites sit inside per-frame layout passes and interpolate counts that are themselves
+    /// derived from walking every managed window, which an eager argument would compute sixty
+    /// times a second whether or not anyone was listening.
+    func debugLog(_ message: @autoclosure () -> String) {
         guard debugLogging else {
             return
         }
-        print("scrollini: \(message)")
+        print("scrollini: \(message())")
     }
 }

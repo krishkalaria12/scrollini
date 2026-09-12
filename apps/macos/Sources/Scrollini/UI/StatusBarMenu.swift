@@ -58,7 +58,14 @@ extension Scrollini {
             return
         }
 
-        button.title = button.image == nil ? "Scrollini" : ""
+        // Reached from every layout pass, which during a trackpad scroll means once a frame.
+        // Assigning the same title still invalidates the button and asks the status bar to
+        // re-measure it, so the comparison is worth the branch.
+        let title = button.image == nil ? "Scrollini" : ""
+        guard button.title != title else {
+            return
+        }
+        button.title = title
     }
 
     @MainActor

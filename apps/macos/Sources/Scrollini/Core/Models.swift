@@ -3,14 +3,55 @@ import CoreGraphics
 import Darwin
 import Foundation
 
+/// Everything the configured rules have to say about one window, worked out in a single pass.
+/// Resolution is per setting rather than per rule: a narrow rule that only pins `behavior` must
+/// not swallow the `workspace` a broader rule declares for the same window.
+struct ResolvedWindowRules {
+    var widthRatio: CGFloat?
+    var behavior: WindowBehavior?
+    var workspace: Int?
+    var openPosition: NewWindowPosition?
+    var hoverToFocus: Bool?
+    var trackpadNavigation: Bool?
+}
+
 final class ManagedWindow {
     let element: AXUIElement
     let pid: pid_t
     let windowID: UInt32?
-    var bundleID: String?
-    var appName: String
-    var title: String
+    var bundleID: String? {
+        didSet {
+            if bundleID != oldValue {
+                resolvedRules = nil
+            }
+        }
+    }
+
+    var appName: String {
+        didSet {
+            if appName != oldValue {
+                resolvedRules = nil
+            }
+        }
+    }
+
+    var title: String {
+        didSet {
+            if title != oldValue {
+                resolvedRules = nil
+            }
+        }
+    }
+
     var manualWidthRatio: CGFloat?
+
+    /// What the rules resolved to for this window, and the rule revision they were resolved
+    /// against. Matching a rule that carries `title_contains` runs a case- and
+    /// diacritic-insensitive string search, and the strip asks for a column's width ratio once
+    /// per column per layout pass, several times a frame while scrolling. The answer only moves
+    /// when this window's identity changes or the config is reloaded, and both of those clear it.
+    var resolvedRules: ResolvedWindowRules?
+    var resolvedRulesRevision: UInt64 = 0
     /// Width this column had before it was maximized, so maximizing twice toggles back.
     var preMaximizeWidthRatio: CGFloat?
 
@@ -119,5 +160,4 @@ struct WindowMotion {
     var startsVisible: Bool
     var endsVisible: Bool
     var participates: Bool
-    var sizeStable: Bool
 }

@@ -219,12 +219,29 @@ extension Scrollini {
         }
     }
 
-    func restoreFloatingVisibility(raise: Bool = false, deferred: Bool = false) {
+    /// Alpha and window level are both cached, so re-asserting them costs nothing once they have
+    /// landed. Raising is not: `kAXRaiseAction` is a synchronous round trip into the owning app
+    /// every time it is asked for, and the non-animated layout path asks for it on every pass,
+    /// which during a trackpad scroll is once a frame per floating window. Raising is idempotent,
+    /// so it is rate limited here. `forceRaise` is for the re-assert chain that fires after a
+    /// focus change, whose whole purpose is to land at specific moments while the app settles.
+    func restoreFloatingVisibility(raise: Bool = false, deferred: Bool = false, forceRaise: Bool = false) {
+        guard !floatingWindows.isEmpty else {
+            return
+        }
+
         for window in floatingWindows {
             setWindowAlpha(1, for: window.windowID)
             setFloatingWindowLevel(for: window)
-            if raise {
-                AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+        }
+
+        if raise {
+            let now = CFAbsoluteTimeGetCurrent()
+            if forceRaise || now - lastFloatingRaiseAt >= floatingRaiseInterval {
+                lastFloatingRaiseAt = now
+                for window in floatingWindows {
+                    AXUIElementPerformAction(window.element, kAXRaiseAction as CFString)
+                }
             }
         }
 
@@ -255,7 +272,7 @@ extension Scrollini {
                 else {
                     return
                 }
-                restoreFloatingVisibility(raise: true)
+                restoreFloatingVisibility(raise: true, forceRaise: true)
             }
         }
     }

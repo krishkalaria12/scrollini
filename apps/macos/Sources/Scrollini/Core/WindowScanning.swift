@@ -39,10 +39,12 @@ extension Scrollini {
     }
 
     @objc func applicationLaunched(_ notification: Notification) {
+        refreshRunningApplications()
         scheduleRescan(after: 0.4, adoptFocused: true)
     }
 
     @objc func applicationTerminated(_ notification: Notification) {
+        refreshRunningApplications()
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
             stopObservingApp(pid: app.processIdentifier)
         }
@@ -79,6 +81,66 @@ extension Scrollini {
             projectLayout(focusActiveWindow: false)
         }
     }
+
+    /// A fingerprint of what the window server is holding right now: one call into WindowServer,
+    /// no accessibility traffic at all. It answers "has anything opened, closed, or changed
+    /// on-screen state" for a small fraction of what a real sweep costs.
+    func windowServerSignature() -> [UInt64] {
+        guard let entries = CGWindowListCopyWindowInfo(
+            [.excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return []
+        }
+
+        var signature: [UInt64] = []
+        signature.reserveCapacity(entries.count)
+        for entry in entries {
+            guard let layer = entry[kCGWindowLayer as String] as? Int, layer == 0,
+                  let number = entry[kCGWindowNumber as String] as? UInt32,
+                  let pid = entry[kCGWindowOwnerPID as String] as? pid_t
+            else {
+                continue
+            }
+
+            // Minimizing takes a window out of the on-screen set without destroying it, and that
+            // has to register as a change or a minimized column would stay in the strip.
+            let onScreen = entry[kCGWindowIsOnscreen as String] as? Bool ?? false
+            var token = UInt64(UInt32(bitPattern: pid)) << 32 | UInt64(number)
+            if onScreen {
+                token |= 1 << 63
+            }
+            signature.append(token)
+        }
+
+        signature.sort()
+        return signature
+    }
+
+    /// The once-a-second safety net behind the accessibility notifications that already rescan
+    /// the moment a window is created or destroyed. A real sweep costs a synchronous round trip
+    /// into every running application plus several more for every window it does not already
+    /// manage, and the tick used to pay that every second for the life of the session whether or
+    /// not anything had happened. The fingerprint decides. A full sweep still runs on a slower
+    /// cadence so that what the fingerprint cannot see, a retitled window above all, does not go
+    /// stale indefinitely.
+    func rescanWindowsIfChanged(adoptFocused: Bool) {
+        let signature = windowServerSignature()
+        let now = CFAbsoluteTimeGetCurrent()
+
+        if !adoptFocused,
+           !signature.isEmpty,
+           signature == lastWindowServerSignature,
+           now - lastFullRescanAt < fullRescanInterval
+        {
+            return
+        }
+
+        lastWindowServerSignature = signature
+        lastFullRescanAt = now
+        rescanWindows(adoptFocused: adoptFocused)
+    }
+
     func rescanWindows(adoptFocused: Bool) {
         guard !transientSystemWindowIsActive() else {
             cancelHoverFocus()
@@ -166,7 +228,7 @@ extension Scrollini {
         }
         var windows: [ManagedWindow] = []
 
-        for app in NSWorkspace.shared.runningApplications {
+        for app in runningApplications() {
             guard app.activationPolicy == .regular else {
                 continue
             }
@@ -219,21 +281,36 @@ extension Scrollini {
     }
 
     func isManageableWindow(_ element: AXUIElement) -> Bool {
+        let key = AXElementKey(element)
+        if unmanageableWindows.contains(key) {
+            return false
+        }
+
         let role = axString(element, kAXRoleAttribute)
         let subrole = axString(element, kAXSubroleAttribute)
 
-        guard role == kAXWindowRole else {
+        // Role and subrole are fixed for the life of a window, so failing on either is a final
+        // answer and worth remembering. The checks below cost five more round trips, and a
+        // palette, popover, or sheet that never becomes a standard window would otherwise pay all
+        // of them on every sweep for as long as it exists.
+        //
+        // A `nil` role is not that answer. An application that has not finished building its
+        // accessibility tree answers nothing at all, and caching that would blacklist a perfectly
+        // ordinary window for the rest of the session over a few milliseconds of startup timing.
+        let roleIsManageable = role == kAXWindowRole
+            && !isTransientRole(role)
+            && !isTransientSubrole(subrole)
+            && (subrole == nil || subrole == kAXStandardWindowSubrole)
+        guard roleIsManageable else {
+            if role != nil {
+                rememberUnmanageableWindow(key)
+            }
             return false
         }
 
-        guard !isTransientRole(role), !isTransientSubrole(subrole) else {
-            return false
-        }
-
-        if let subrole, subrole != kAXStandardWindowSubrole {
-            return false
-        }
-
+        // Minimized state, size, and settability all move while a window is alive: a window that
+        // is minimized now can be restored, and an app that has not finished launching can refuse
+        // to make position settable and then allow it a moment later. None of these are cached.
         if axBool(element, kAXMinimizedAttribute) == true {
             return false
         }
@@ -247,6 +324,16 @@ extension Scrollini {
         let positionError = AXUIElementIsAttributeSettable(element, kAXPositionAttribute as CFString, &positionSettable)
         let sizeError = AXUIElementIsAttributeSettable(element, kAXSizeAttribute as CFString, &sizeSettable)
         return positionError == .success && sizeError == .success && positionSettable.boolValue && sizeSettable.boolValue
+    }
+
+    /// Rejections accumulate for as long as the session runs and there is no notification that
+    /// says a window scrollini never managed has gone away, so the set is emptied wholesale once
+    /// it grows past what any real desktop holds. The cost of being wrong is one expensive sweep.
+    func rememberUnmanageableWindow(_ key: AXElementKey) {
+        if unmanageableWindows.count >= 512 {
+            unmanageableWindows.removeAll(keepingCapacity: true)
+        }
+        unmanageableWindows.insert(key)
     }
 
     func insertNewWindow(_ window: ManagedWindow, applyLayout: Bool = true, focusNewWindow: Bool = true) {

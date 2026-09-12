@@ -74,10 +74,13 @@ extension Scrollini {
 
     var transientCheckApplications: [NSRunningApplication] {
         var apps: [NSRunningApplication] = []
-        if let frontmostApplication = NSWorkspace.shared.frontmostApplication {
+        // Tracked from the activation notification rather than read back off NSWorkspace: this
+        // property is reached from the event tap, which handles every keystroke and every pointer
+        // move, and each of those reads was a cross-process lookup.
+        if let frontmostApplication {
             apps.append(frontmostApplication)
         }
-        for app in NSWorkspace.shared.runningApplications where app.isActive {
+        for app in runningApplications() where app.isActive {
             if !apps.contains(where: { $0.processIdentifier == app.processIdentifier }) {
                 apps.append(app)
             }
@@ -96,7 +99,7 @@ extension Scrollini {
             return []
         }
 
-        return NSWorkspace.shared.runningApplications.filter { app in
+        return runningApplications().filter { app in
             guard isOpenAndSavePanelService(app),
                   let name = app.localizedName
             else {

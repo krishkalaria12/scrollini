@@ -36,16 +36,13 @@ extension Scrollini {
                 return nil
             }
             let participates = startFrame.intersects(viewport) || endFrame.intersects(viewport)
-            let sizeStable = abs(startFrame.width - endFrame.width) < 0.5
-                && abs(startFrame.height - endFrame.height) < 0.5
             return WindowMotion(
                 window: window,
                 startFrame: startFrame,
                 endFrame: endFrame,
                 startsVisible: startByWindow[id]?.visible ?? false,
                 endsVisible: targetByWindow[id]?.visible ?? false,
-                participates: participates,
-                sizeStable: sizeStable
+                participates: participates
             )
         }
 
@@ -163,13 +160,12 @@ extension Scrollini {
     }
 
     func applyFrame(_ frame: CGRect, to motion: WindowMotion) {
-        applyFrame(frame, to: motion.window, sizeStable: motion.sizeStable)
+        applyFrame(frame, to: motion.window)
     }
 
     func applyFrame(
         _ frame: CGRect,
         to window: ManagedWindow,
-        sizeStable: Bool = false,
         force: Bool = false
     ) {
         let id = ObjectIdentifier(window)
@@ -180,13 +176,19 @@ extension Scrollini {
             return
         }
 
+        // A window that is only sliding needs one accessibility write, not the three
+        // `setAXFrame` spends reconciling a simultaneous move and resize. Scrolling the strip is
+        // exactly that case for every column on screen, every frame, so the size check is made
+        // here against what was last written rather than being left to the caller to assert:
+        // `applyLayout` has no way to know, and defaulting it to false tripled the cost of the
+        // hottest loop in the program.
+        let previousFrame = force ? nil : appliedFrames[id]
+        let sizeUnchanged = previousFrame.map {
+            abs($0.width - frame.width) < 0.5 && abs($0.height - frame.height) < 0.5
+        } ?? false
+
         let succeeded: Bool
-        if !force,
-           sizeStable,
-           let previous = appliedFrames[id],
-           abs(previous.width - frame.width) < 0.5,
-           abs(previous.height - frame.height) < 0.5
-        {
+        if sizeUnchanged {
             succeeded = setAXPosition(frame.origin, for: window.element)
         } else {
             succeeded = setAXFrame(frame, for: window.element)
